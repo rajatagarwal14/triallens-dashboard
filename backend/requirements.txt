@@ -15,3 +15,8 @@ numpy>=1.26,<3
 python-dotenv>=1.0,<2
 pydantic>=2.9,<3
 cachetools>=5.3,<7
+
+# Optional — v2 Claude enrichment tier only. The app runs fully without this
+# installed and without ANTHROPIC_API_KEY set (services/claude_extract.enabled()
+# returns False and every caller falls back to the deterministic v1 path).
+anthropic>=0.69,<1
