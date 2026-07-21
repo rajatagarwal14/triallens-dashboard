@@ -1,0 +1,157 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+
+  html, body, #root {
+    height: 100%;
+    background-color: #F2F5F8;
+    color: #2B3A42;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #F2F5F8; }
+  ::-webkit-scrollbar-thumb { background: #D2DADF; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #7FA9C3; }
+
+  ::selection { background: rgba(0,163,224,0.2); }
+}
+
+@layer components {
+  .glass {
+    background: #FFFFFF;
+    border: 1px solid #D2DADF;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+  }
+  .glass-hover {
+    transition: box-shadow 0.2s, transform 0.2s;
+  }
+  .glass-hover:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06);
+    transform: translateY(-1px);
+  }
+
+  .glow-border {
+    border: 1px solid rgba(0,163,224,0.4);
+    box-shadow: 0 0 16px rgba(0,163,224,0.12);
+  }
+
+  .status-recruiting   { @apply bg-green-50 text-green-700 border border-green-200; }
+  .status-active       { @apply bg-blue-50 text-blue-700 border border-blue-200; }
+  .status-completed    { @apply bg-slate-100 text-slate-600 border border-slate-200; }
+  .status-terminated   { @apply bg-red-50 text-red-700 border border-red-200; }
+  .status-withdrawn    { @apply bg-orange-50 text-orange-700 border border-orange-200; }
+  .status-suspended    { @apply bg-yellow-50 text-yellow-700 border border-yellow-200; }
+  .status-enrolling    { @apply bg-cyan-50 text-cyan-700 border border-cyan-200; }
+  .status-unknown      { @apply bg-gray-50 text-gray-500 border border-gray-200; }
+  .status-nla          { @apply bg-rose-50 text-rose-700 border border-rose-200; }
+  .status-approved     { @apply bg-teal-50 text-teal-700 border border-teal-200; }
+  .status-available    { @apply bg-lime-50 text-lime-700 border border-lime-200; }
+  .status-tempna       { @apply bg-yellow-50 text-yellow-700 border border-yellow-200; }
+  .status-withheld     { @apply bg-stone-100 text-stone-600 border border-stone-200; }
+  .status-default      { @apply bg-gray-100 text-gray-600 border border-gray-200; }
+
+  .phase-1 { @apply bg-violet-50 text-violet-700 border border-violet-200; }
+  .phase-2 { @apply bg-blue-50 text-blue-700 border border-blue-200; }
+  .phase-3 { @apply bg-sky-50 text-sky-700 border border-sky-200; }
+  .phase-4 { @apply bg-teal-50 text-teal-700 border border-teal-200; }
+
+  /* input — use built-in Tailwind names inside @apply */
+  .input-dark {
+    @apply w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-slate-700
+           placeholder-slate-400 focus:outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20 transition-all;
+  }
+
+  .btn-primary {
+    background: #00A3E0;
+    @apply text-white font-semibold px-4 py-2 rounded-lg text-sm transition-all shadow-sm active:scale-95;
+  }
+  .btn-primary:hover { background: #005487; }
+
+  .btn-ghost {
+    @apply bg-white hover:bg-slate-50 text-slate-700 border border-gray-300 hover:border-sky-300
+           font-medium px-4 py-2 rounded-lg text-sm transition-all active:scale-95;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium cursor-pointer
+           border transition-all select-none;
+  }
+  .chip-active {
+    background: rgba(0,163,224,0.1);
+    border-color: rgba(0,163,224,0.4);
+    color: #005487;
+  }
+  .chip-idle {
+    @apply bg-white border-gray-300 text-slate-500;
+  }
+  .chip-idle:hover {
+    border-color: rgba(0,163,224,0.4);
+    color: #005487;
+  }
+
+  .stat-card {
+    @apply glass rounded-xl p-5 glass-hover;
+  }
+
+  .section-title {
+    @apply text-xs font-bold tracking-widest uppercase text-slate-500 mb-3;
+  }
+
+  .table-row {
+    @apply border-b border-gray-200 hover:bg-slate-50 transition-colors cursor-pointer;
+  }
+
+  /* Leaflet light theme */
+  .leaflet-container { background: #E8EEF3 !important; }
+  .leaflet-popup-content-wrapper {
+    background: #FFFFFF !important;
+    color: #2B3A42 !important;
+    border: 1px solid #D2DADF !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.12) !important;
+  }
+  .leaflet-popup-tip { background: #FFFFFF !important; }
+  /* Light-theme map tooltips (choropleth + site dots) — override Leaflet's dark default */
+  .leaflet-tooltip {
+    background: #FFFFFF !important;
+    color: #2B3A42 !important;
+    border: 1px solid #D2DADF !important;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1) !important;
+    border-radius: 6px !important;
+    font-size: 11px !important;
+  }
+  .leaflet-tooltip .text-iq-muted { color: #6B7A85 !important; }
+  .leaflet-tooltip-left::before { border-left-color: #D2DADF !important; }
+  .leaflet-tooltip-right::before { border-right-color: #D2DADF !important; }
+  .leaflet-tooltip-top::before { border-top-color: #D2DADF !important; }
+  .leaflet-tooltip-bottom::before { border-bottom-color: #D2DADF !important; }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: linear-gradient(135deg, #005487, #00A3E0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .animate-in { animation: slideUp 0.3s ease-out both; }
+}
+
+/* Skeleton shimmer sweep */
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Recharts light */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: #D2DADF !important; }
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #FFFFFF !important;
+  border: 1px solid #D2DADF !important;
+  border-radius: 8px !important;
+  color: #2B3A42 !important;
+}
