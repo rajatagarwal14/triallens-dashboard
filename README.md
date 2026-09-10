@@ -50,6 +50,28 @@ dependencies, and launches both servers.
 
 Press `Ctrl+C` to stop both (macOS/Linux), or see the Windows steps above.
 
+### Docker (one command, any OS — the option for sending this to someone else)
+
+The only prerequisite is [Docker](https://www.docker.com/products/docker-desktop/)
+itself — no Python, no Node, no version-matching. This builds the whole app
+(backend + frontend) straight from GitHub and runs it as one container on one port:
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 $(docker build -q https://github.com/rajatagarwal14/triallens-dashboard.git)
+```
+
+Open **http://localhost:8000** once it finishes (the first run takes a minute or
+two to build; it's fast on every run after, since Docker caches the layers).
+
+> This only works if the repo is **public** — a private repo needs the person
+> running it to already have `git` access configured. If you've cloned it
+> yourself, the equivalent single command from inside the folder is:
+> ```bash
+> docker compose up --build
+> ```
+> then open http://localhost:8000. `Ctrl+C` stops it; `docker compose down`
+> also removes the container.
+
 <details>
 <summary>Manual start (if you prefer running them separately)</summary>
 

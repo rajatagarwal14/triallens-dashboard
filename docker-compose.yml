@@ -1,0 +1,8 @@
+services:
+  triallens:
+    build: .
+    ports:
+      # Local-machine-only by default. Change to "8000:8000" to also allow
+      # other devices on the same network to reach it.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped

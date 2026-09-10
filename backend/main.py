@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import pathlib
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from routers import studies, similarity, landscape, competition, research, alerts, sites, cohorts
 from services import ct_gov
 from services.ct_gov import CTGovError
@@ -68,3 +70,24 @@ app.include_router(cohorts.router, prefix="/api/cohorts", tags=["cohorts"])
 @app.get("/health")
 async def health():
     return {"status": "ok", "source": "ClinicalTrials.gov API v2"}
+
+
+# ── Optional: serve the built frontend from this same process ───────────────
+# Only active when frontend/dist exists (the Docker image builds it there).
+# Normal local dev (start.sh / start.bat) runs the Vite dev server separately
+# and never creates this directory, so this block is a no-op there — it does
+# not change local dev behavior at all. Registered LAST so it never shadows
+# any /api/* route or /health above; Starlette matches routes in registration
+# order, and a catch-all here can only ever be reached as a fallback.
+_FRONTEND_DIST = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="frontend-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        candidate = _FRONTEND_DIST / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        # Client-side routes (react-router, BrowserRouter) all resolve to the
+        # SPA shell, which then renders the right page from the URL itself.
+        return FileResponse(_FRONTEND_DIST / "index.html")

@@ -1,0 +1,12 @@
+# Keep the build context small and force a fresh frontend build every time.
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+backend/.cache
+backend/goldset/*.jsonl
+frontend/dist
+.git
+.github
+*.log
+.DS_Store
