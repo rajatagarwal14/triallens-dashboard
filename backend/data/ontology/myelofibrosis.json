@@ -1,0 +1,25 @@
+{
+  "indication": "Myelofibrosis",
+  "slug": "myelofibrosis",
+  "parent": "Myeloproliferative neoplasm",
+  "aliases": [
+    "MF",
+    "PMF",
+    "primary myelofibrosis",
+    "post-PV myelofibrosis",
+    "post-ET myelofibrosis",
+    "secondary myelofibrosis",
+    "post-polycythemia vera myelofibrosis",
+    "post-essential thrombocythemia myelofibrosis",
+    "myelofibroses"
+  ],
+  "icd_codes": [],
+  "definition": "Fibrotic-phase MPN. Primary (PMF) or secondary (post-PV/post-ET MF). Advanced relative to chronic-phase PV/ET; may undergo leukemic transformation.",
+  "is_standard_diagnosis": true,
+  "notes": "Encodes the myeloid progression continuum: chronic MPN (PV/ET) -> myelofibrosis -> blast phase. UNREVIEWED.",
+  "provenance": {
+    "source": "clinical-reference (WHO Ph-negative MPN classification; ASH/Blood + PMC on myelofibrotic and leukemic transformation)",
+    "imported_at": "2026-07-22T01:19:38+05:30",
+    "reviewed_by": null
+  }
+}

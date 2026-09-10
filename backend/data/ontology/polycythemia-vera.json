@@ -1,0 +1,18 @@
+{
+  "indication": "Polycythemia vera",
+  "slug": "polycythemia-vera",
+  "parent": "Myeloproliferative neoplasm",
+  "aliases": [
+    "PV",
+    "polycythaemia vera"
+  ],
+  "icd_codes": [],
+  "definition": "Chronic-phase MPN with erythrocytosis; may progress to post-PV myelofibrosis.",
+  "is_standard_diagnosis": true,
+  "notes": "Encodes the myeloid progression continuum: chronic MPN (PV/ET) -> myelofibrosis -> blast phase. UNREVIEWED.",
+  "provenance": {
+    "source": "clinical-reference (WHO Ph-negative MPN classification; ASH/Blood + PMC on myelofibrotic and leukemic transformation)",
+    "imported_at": "2026-07-22T01:19:38+05:30",
+    "reviewed_by": null
+  }
+}

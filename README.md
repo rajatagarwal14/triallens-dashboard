@@ -12,7 +12,26 @@ components — is deterministic and runs entirely offline against public data.
 
 ## Quick start (plug and play)
 
-**Prerequisites:** Python 3.9+ and Node 18+.
+**Prerequisites:** Python 3.9+ and Node 18+. If you don't have these yet, the
+Windows steps below tell you exactly where to get them — no other setup needed.
+
+### Windows (no command line required)
+
+1. Download this project: green **Code** button above → **Download ZIP** → unzip it
+   anywhere (e.g. your Desktop). *(Or `git clone` the repo if you have Git.)*
+2. Double-click **`start.bat`** inside the unzipped folder.
+3. First run only: it will ask you to install [Python](https://www.python.org/downloads/)
+   and/or [Node.js](https://nodejs.org/) if either is missing — a short one-time
+   install, no configuration needed (for Python, tick **"Add python.exe to PATH"**
+   during setup). Once installed, double-click `start.bat` again.
+4. Two windows will open (backend + dashboard) and your browser will open
+   automatically to the dashboard. That's it.
+
+To stop TrialLens, close those two windows, or double-click **`stop.bat`**.
+Running `start.bat` again re-uses what's already running instead of erroring —
+it's safe to double-click any time.
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/rajatagarwal14/triallens-dashboard.git
@@ -29,7 +48,7 @@ dependencies, and launches both servers.
 | Backend (FastAPI) | http://localhost:8000 |
 | API docs (Swagger) | http://localhost:8000/api/docs |
 
-Press `Ctrl+C` to stop both.
+Press `Ctrl+C` to stop both (macOS/Linux), or see the Windows steps above.
 
 <details>
 <summary>Manual start (if you prefer running them separately)</summary>

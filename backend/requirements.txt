@@ -15,3 +15,7 @@ numpy>=1.26,<3
 python-dotenv>=1.0,<2
 pydantic>=2.9,<3
 cachetools>=5.3,<7
+
+# NOTE: the optional Claude Science enrichment tier (backend/services/claude_extract.py)
+# is intentionally NOT installed by default — see requirements-optional.txt. The running
+# dashboard never imports it, so it adds nothing but install time/risk in this phase.
