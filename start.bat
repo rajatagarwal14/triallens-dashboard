@@ -11,6 +11,13 @@ echo.
 set "BACKEND=%~dp0backend"
 set "FRONTEND=%~dp0frontend"
 
+rem --- Is winget available? (built into Windows 10 2004+ / Windows 11 —
+rem     lets us install Python/Node ourselves instead of sending the user to
+rem     a browser. If it's missing, we just fall back to the manual links.) ---
+set "HAVE_WINGET=0"
+winget --version >nul 2>nul
+if !errorlevel! equ 0 set "HAVE_WINGET=1"
+
 rem --- Find Python (prefer the "py" launcher, fall back to "python") ---
 set "PYCMD="
 py -3 --version >nul 2>nul
@@ -19,32 +26,87 @@ if "!PYCMD!"=="" (
     python --version >nul 2>nul
     if !errorlevel! equ 0 set "PYCMD=python"
 )
+set "NEED_RESTART=0"
 if "!PYCMD!"=="" (
-    echo   [!] Python was not found on this computer.
-    echo.
-    echo   Please install Python 3.9 or newer from:
-    echo     https://www.python.org/downloads/
-    echo   IMPORTANT: on the first setup screen, check the box
-    echo   "Add python.exe to PATH" before clicking Install.
-    echo.
-    echo   Then double-click start.bat again.
-    echo.
-    pause
-    exit /b 1
+    if "!HAVE_WINGET!"=="1" (
+        echo   Python was not found - installing it now via winget...
+        echo   ^(this is silent and does not need a browser^)
+        winget install -e --id Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
+        if !errorlevel! equ 0 (
+            set "NEED_RESTART=1"
+        ) else (
+            echo   [!] Automatic install did not complete.
+            echo.
+            echo   Please install Python 3.9 or newer yourself from:
+            echo     https://www.python.org/downloads/
+            echo   IMPORTANT: on the first setup screen, check the box
+            echo   "Add python.exe to PATH" before clicking Install.
+            echo.
+            echo   Then double-click start.bat again.
+            echo.
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo   [!] Python was not found on this computer.
+        echo.
+        echo   Please install Python 3.9 or newer from:
+        echo     https://www.python.org/downloads/
+        echo   IMPORTANT: on the first setup screen, check the box
+        echo   "Add python.exe to PATH" before clicking Install.
+        echo.
+        echo   Then double-click start.bat again.
+        echo.
+        pause
+        exit /b 1
+    )
 )
 
 rem --- Find Node.js ---
 node --version >nul 2>nul
 if not !errorlevel! equ 0 (
-    echo   [!] Node.js was not found on this computer.
+    if "!HAVE_WINGET!"=="1" (
+        echo   Node.js was not found - installing it now via winget...
+        echo   ^(this may ask you to approve an admin prompt - that's normal^)
+        winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+        if !errorlevel! equ 0 (
+            set "NEED_RESTART=1"
+        ) else (
+            echo   [!] Automatic install did not complete - it likely needs an
+            echo   administrator on this computer to approve it.
+            echo.
+            echo   Please install the "LTS" version yourself from:
+            echo     https://nodejs.org/
+            echo.
+            echo   Then double-click start.bat again.
+            echo.
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo   [!] Node.js was not found on this computer.
+        echo.
+        echo   Please install the "LTS" version from:
+        echo     https://nodejs.org/
+        echo.
+        echo   Then double-click start.bat again.
+        echo.
+        pause
+        exit /b 1
+    )
+)
+
+rem --- Windows doesn't give a freshly-installed program's PATH to this
+rem     already-running window. Rather than risk getting that wrong, ask for
+rem     one more double-click - everything from here on is fully automatic. ---
+if "!NEED_RESTART!"=="1" (
     echo.
-    echo   Please install the "LTS" version from:
-    echo     https://nodejs.org/
-    echo.
-    echo   Then double-click start.bat again.
+    echo   Setup installed the required program^(s^).
+    echo   Please close this window and double-click start.bat one more time
+    echo   to finish - everything after this is automatic.
     echo.
     pause
-    exit /b 1
+    exit /b 0
 )
 
 rem --- Backend: create the Python environment on first run only ---
