@@ -1,0 +1,22 @@
+{
+  "indication": "Blast phase MPN",
+  "slug": "blast-phase-mpn",
+  "parent": "Myelofibrosis",
+  "aliases": [
+    "MPN-BP",
+    "MPN blast phase",
+    "post-MPN AML",
+    "secondary AML",
+    "leukemic transformation",
+    "accelerated phase MPN"
+  ],
+  "icd_codes": [],
+  "definition": "Leukemic transformation of MPN (>=20% blasts). Most advanced stage of the continuum; molecularly distinct from de-novo AML.",
+  "is_standard_diagnosis": true,
+  "notes": "Encodes the myeloid progression continuum: chronic MPN (PV/ET) -> myelofibrosis -> blast phase. UNREVIEWED.",
+  "provenance": {
+    "source": "clinical-reference (WHO Ph-negative MPN classification; ASH/Blood + PMC on myelofibrotic and leukemic transformation)",
+    "imported_at": "2026-07-22T01:19:38+05:30",
+    "reviewed_by": null
+  }
+}

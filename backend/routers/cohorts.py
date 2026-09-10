@@ -20,7 +20,7 @@ from fastapi import APIRouter, Query
 from typing import Optional
 from collections import defaultdict
 from statistics import median
-from services import ct_gov
+from services import ct_gov, ontology
 
 router = APIRouter()
 
@@ -114,7 +114,21 @@ def _cls_population(s, ctx):
         foreign = {c for c in distinct if primary not in c}
         is_basket = len(foreign) >= 2
     else:
+        foreign = set()
         is_basket = len(distinct) >= 3
+
+    # Ontology refinement (v2, optional). Without it the v1 result above stands.
+    # With it, split "foreign" conditions into same-family (stages/siblings on one
+    # disease continuum) vs genuinely unrelated families. A trial spanning
+    # MF + PV + ET is a disease SPECTRUM, not a basket — only cross-family
+    # recruitment earns the basket label.
+    if is_basket and primary and ontology.loaded():
+        cross = {c for c in foreign if not ontology.same_family(primary, c)}
+        if len(cross) < 2:
+            root = ontology.family_root(primary)
+            label = f"{root.title()} spectrum" if root else "Disease spectrum"
+            return ("spectrum", label)
+
     if is_basket:
         return ("basket", "Basket / umbrella")
     text = ctx["text"][s["nctId"]]
@@ -201,6 +215,7 @@ _DEFINITIONS = {
     "combo": "Two or more active drugs, or an explicit combination regimen.",
     "mono": "Single active agent.",
     "basket": "Recruits several distinct conditions under one protocol — broadest pool.",
+    "spectrum": "Recruits across stages/siblings of ONE disease continuum (e.g. MF + PV + ET) — broader than a single stage, but not a cross-family basket.",
     "exact": "Eligibility requires the searched qualifier (narrowest, slowest-accruing pool).",
     "indication_only": "Recruits the core indication without the searched qualifier.",
     "focused": "Recruits a single focused indication.",

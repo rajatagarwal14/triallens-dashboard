@@ -122,7 +122,14 @@ def enabled() -> bool:
 
 
 def _client():
-    import anthropic  # imported lazily so the app runs without the dep installed
+    try:
+        import anthropic  # imported lazily so the app runs without the dep installed
+    except ImportError as e:
+        raise RuntimeError(
+            "The 'anthropic' package is not installed. It is intentionally left out of "
+            "requirements.txt — install it only if you're running this optional workflow:\n"
+            "  pip install -r requirements-optional.txt"
+        ) from e
     return anthropic.Anthropic()
 
 

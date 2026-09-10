@@ -1,0 +1,5 @@
+# Force consistent line endings regardless of the cloning machine's git config,
+# so the Windows launcher scripts always work after a fresh `git clone`.
+* text=auto
+*.sh  text eol=lf
+*.bat text eol=crlf

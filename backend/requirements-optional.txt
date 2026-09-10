@@ -1,0 +1,8 @@
+# OPTIONAL — only needed for the v2 Claude Science handoff scripts
+# (scripts/validate_extraction.py calling services/claude_extract.py with
+# ANTHROPIC_API_KEY set). The dashboard itself never imports this package and
+# runs fully without it. Install only if you're actually running that workflow:
+#
+#   pip install -r requirements-optional.txt
+
+anthropic>=0.69,<1
