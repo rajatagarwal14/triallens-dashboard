@@ -12,6 +12,7 @@ import { CoverageBadge } from '@/components/common/CoverageBadge'
 import { ErrorState } from '@/components/common/ErrorState'
 import { SkeletonChart } from '@/components/common/SkeletonCard'
 import { ActiveFilters } from '@/components/common/ActiveFilters'
+import { useAnalytics } from '@/hooks/useAnalytics'
 import { api } from '@/api/client'
 import { useSharedSearch, filterParams } from '@/context/SearchContext'
 import { clsx } from 'clsx'
@@ -60,10 +61,7 @@ export function CompetitionPage() {
 
   const params = { ...filterParams(filters), completionFrom: from || undefined, completionTo: to || undefined, granularity }
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['competition', params],
-    queryFn: () => api.getCompetition(params),
-  })
+  const { data, isLoading, isError, error, refetch } = useAnalytics(['competition', params], () => api.getCompetition(params))
 
   const analyze = (c: string) => { const v = c.trim(); if (v.length >= 2) setFilters({ condition: v }) }
 

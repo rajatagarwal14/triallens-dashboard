@@ -245,3 +245,19 @@ def test_compute_is_memoised_per_dataset_version(tmp_path):
         b = await m.compute(snap, "x", (), fn)
         assert a == b == {"count": 1200} and n["calls"] == 1
     asyncio.run(go())
+
+
+def test_total_survives_pages_that_omit_total_count(tmp_path):
+    """The real API sends totalCount on page 1 only; later pages must not reset it to 0."""
+    async def go():
+        class FirstPageOnly(FakeRegistry):
+            async def __call__(self, **kw):
+                out = await super().__call__(**kw)
+                if kw.get("page_token"):
+                    out["totalCount"] = 0
+                return out
+        m = mgr(tmp_path, FirstPageOnly(n=2500))
+        await m.snapshot(F)
+        st = await drain(m, F)
+        assert st["total"] == 2500 and st["analyzed"] == 2500 and st["isComplete"]
+    asyncio.run(go())

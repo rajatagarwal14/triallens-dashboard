@@ -2,19 +2,26 @@ import type {
   SearchResult, Study, LandscapeData, GeoCountry, Coverage,
   EligibilityExtracted, SimilarStudy, SearchFilters,
   CompetitionData, ResearchData, AlertData, SitesData, MarketRestrictiveness,
-  CohortData,
+  CohortData, PrevalenceResponse,
 } from '@/types'
 
 const BASE = '/api'
 
-async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+type Params = Record<string, string | number | boolean | undefined>
+
+async function send<T>(method: 'GET' | 'POST', path: string, params?: Params): Promise<T> {
   const url = new URL(`${BASE}${path}`, window.location.origin)
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
       if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v))
     })
   }
-  const res = await fetch(url.toString())
+  let res: Response
+  try {
+    res = await fetch(url.toString(), { method })
+  } catch {
+    throw new Error('Cannot reach the TrialLens backend. Is it running? (start.bat / start.sh)')
+  }
   if (!res.ok) {
     // Surface the backend's human-readable message when present
     let message = `${res.status} ${res.statusText}`
@@ -26,6 +33,9 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
   }
   return res.json() as Promise<T>
 }
+
+const get = <T,>(path: string, params?: Params) => send<T>('GET', path, params)
+const post = <T,>(path: string, params?: Params) => send<T>('POST', path, params)
 
 export const api = {
   searchStudies: (filters: Partial<SearchFilters>): Promise<SearchResult> =>
@@ -72,13 +82,11 @@ export const api = {
   getAlerts: (params: Record<string, string | number | undefined>): Promise<AlertData> =>
     get('/alerts/', params),
 
-  getPrevalence: (condition: string): Promise<{
-    condition: string
-    found: boolean
-    method?: 'curated' | 'modeled' | 'none'
-    modeled?: boolean
-    countries: Record<string, { prevalence: number; source: string; confidence: string; note: string; method?: string }>
-    supported?: string[]
-    note: string
-  }> => get('/landscape/prevalence', { condition }),
+  getPrevalence: (condition: string): Promise<PrevalenceResponse> =>
+    get('/landscape/prevalence', { condition }),
+
+  // Retrieval progress for the dataset behind the current filters.
+  datasetStatus: (params: Params): Promise<Coverage> => get('/datasets/status', params),
+  datasetContinue: (params: Params): Promise<Coverage> => post('/datasets/continue', params),
+  datasetRefresh: (params: Params): Promise<Coverage> => post('/datasets/refresh', params),
 }

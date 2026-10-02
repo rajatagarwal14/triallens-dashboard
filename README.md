@@ -12,7 +12,7 @@ components — is deterministic and runs entirely offline against public data.
 
 ## Quick start (plug and play)
 
-**Prerequisites:** Python 3.9+ and Node 18+. If you don't have these yet, the
+**Prerequisites:** Python 3.9+ and Node 20.19+ (or 22.12+). If you don't have these yet, the
 Windows steps below tell you exactly where to get them — no other setup needed.
 
 ### Windows (no command line required)
@@ -142,8 +142,18 @@ triallens-dashboard/
 TanStack Query · Recharts · React-Leaflet · Tailwind CSS
 
 ### How the data works
-- **Trial data** — live from the ClinicalTrials.gov v2 API (up to 1,000 studies per query,
-  with a coverage badge disclosing the analysed sample vs the total).
+- **Trial data** — live from the ClinicalTrials.gov v2 API, the **only** external service
+  TrialLens talks to (no API keys, no other third-party calls). For every search the backend
+  retrieves **every matching study** page by page (`nextPageToken`), keeps one record per NCT
+  ID, and stores them locally under `backend/.cache/datasets/`. Analytics are computed over the
+  complete set. While retrieval runs the badge reads *"Retrieved 3,000 of 16,873 · partial"*
+  and the charts refresh as pages arrive; when finished it reads *"Complete · 16,873 trials ·
+  retrieved <time>"*. Failed pages are retried with back-off (honouring the server's
+  `Retry-After`), everything already retrieved is kept, and changing the search starts or
+  reloads the matching dataset. Repeating a search reuses the stored copy (fresh for 6 h);
+  after that only records changed since the last retrieval are fetched and merged by NCT ID,
+  with a full reconcile every 7 days to catch deletions. Very large searches stop at a safety
+  limit of 20,000 studies and offer a **Retrieve all** button.
 - **Prevalence** — two-tier: a curated table for common indications (GLOBOCAN 2022 /
   GBD 2021-derived), falling back to a deterministic `population × category-rate` model so
   any indication resolves. Every value is labelled *curated* or *modeled*, and is manually
@@ -167,8 +177,66 @@ These are inherent to the public registry data and are surfaced in the UI rather
   not recruitment efficiency — per-site actuals do not exist in ClinicalTrials.gov.
 - **Cohort classification is rule-based** on condition and eligibility free text, so it is
   directional. Every cohort is editable for this reason.
-- The world map outline is fetched at runtime from a public GeoJSON source; India is drawn
-  from a bundled official-boundary file.
+- **Prevalence has gaps by design.** Only indications with a curated or category-modelled
+  rate get prevalence/competition-intensity maps; for anything else those layers are empty
+  rather than showing an invented number. Matches are by disease identity (Type 1 diabetes
+  is not Type 2; ALL is not AML); a *parent* match (e.g. a subtype matched to its parent
+  disease) is flagged as an upper bound.
+- **Sites tab "target enrolment" is the size of the trials a site participates in**, not
+  patients that site recruited (the registry has no per-site accrual).
+- **Upcoming readouts use sponsors' own estimated dates** for trials that are still active;
+  they often slip.
+- **Memory:** a 17,000-study dataset makes the backend use roughly 0.7 GB of RAM.
+
+---
+
+## Configuration
+
+All optional; defaults work.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRIALLENS_MAX_STUDIES` | `20000` | Safety cap per dataset (user can lift it with *Retrieve all*) |
+| `TRIALLENS_DATASET_FRESH_HOURS` | `6` | Reuse a stored dataset without re-checking for this long |
+| `TRIALLENS_RECONCILE_DAYS` | `7` | Full re-retrieval interval (catches deleted records) |
+| `TRIALLENS_PAGE_DELAY` | `0.4` s | Pause between page requests (be polite to the API) |
+| `TRIALLENS_CACHE_MB` | `1024` | Disk budget for stored datasets (least-recently-used evicted) |
+| `HTTPS_PROXY` / `NO_PROXY` | — | Corporate proxy (standard variables) |
+| `SSL_CERT_FILE` | — | Path to your company root certificate (.pem) |
+| `TRIALLENS_USE_SYSTEM_CERTS` | off | `1` = trust the Windows/macOS certificate store (needs `pip install truststore`) |
+| `VITE_CARTO_API_KEY` / `VITE_MAP_TILE_URL` | unset | Optional Geo basemap (frontend, build-time; see `frontend/.env.example`). The map works without one |
+
+### Company networks
+
+TrialLens needs HTTPS access to `clinicaltrials.gov`, plus (first install only) your approved
+Python and npm package sources. If something fails, double-click **`diagnose.bat`** (or run
+`./diagnose.sh`): it checks DNS, proxy and TLS and tells you what to ask IT for. TLS
+verification is never disabled. `start.bat` may try `winget` to install Python/Node; on a
+locked-down laptop have IT provide them instead.
+
+### Security notes
+
+There is **no login and no HTTPS** — it is built to run on your own computer and binds to
+`127.0.0.1` only. Do not expose it on a network as-is; shared hosting needs an authenticated
+reverse proxy. The packaged static server is protected against path traversal. Frontend
+dependencies are locked (`npm ci`) and currently report 0 `npm audit` findings.
+
+### Data provenance
+
+- `frontend/src/data/world.json` — world country outlines (low resolution), originally from
+  the public `holtzy/D3-graph-gallery` `world.geojson` (derived from Natural Earth); bundled
+  so the map needs no external request. Names/properties reduced to `name`, coordinates
+  rounded to 3 decimals. Confirm licence terms with your own compliance team if required.
+- `frontend/src/data/india-official.json` — official India outline (see git history).
+- Prevalence figures: curated from GLOBOCAN 2022 / GBD 2021 / literature; see `services/prevalence.py`.
+
+### Tests
+
+```bash
+cd backend && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest
+```
+
+CI (`.github/workflows/ci.yml`) runs them on Linux and Windows and builds the frontend.
 
 ---
 

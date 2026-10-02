@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
@@ -125,8 +125,12 @@ function ChipGroup<T extends string>({
   )
 }
 
+const STUDY_TYPE_LABEL: Record<string, string> = {
+  INTERVENTIONAL: 'Interv.', OBSERVATIONAL: 'Observ.', EXPANDED_ACCESS: 'Exp. access',
+}
+
 function StudyRow({ study, onClick, index }: { study: Study; onClick: () => void; index: number }) {
-  const phase = study.phases[0] ?? 'NA'
+  const phase = study.phases.length ? study.phases.join('/') : 'NA'
   const enrollment = study.enrollment?.count
 
   return (
@@ -154,7 +158,7 @@ function StudyRow({ study, onClick, index }: { study: Study; onClick: () => void
       </td>
       <td className="px-3 py-2.5 whitespace-nowrap">
         <span className="text-[10px] text-iq-muted uppercase tracking-wide">
-          {study.studyType?.slice(0, 4) || '—'}
+          {STUDY_TYPE_LABEL[study.studyType ?? ''] ?? (study.studyType || '—')}
         </span>
       </td>
       <td className="px-3 py-2.5">
@@ -184,6 +188,8 @@ function csvParam<T extends string>(sp: URLSearchParams, key: string): T[] {
   const raw = sp.get(key)
   return raw ? (raw.split(',').filter(Boolean) as T[]) : []
 }
+
+const PAGE_SIZE = 25
 
 export function DiscoveryPage() {
   const navigate = useNavigate()
@@ -244,8 +250,16 @@ export function DiscoveryPage() {
     }
   }, [condition, phases, statuses, studyTypes, sponsorClasses, country, fromYear, setSharedFilters])
 
+  // Token pagination: tokens[i] fetches page i (page 0 has no token). Any change to the
+  // search, filters or sort starts again from page 1.
+  const [tokens, setTokens] = useState<(string | undefined)[]>([undefined])
+  const [pageIdx, setPageIdx] = useState(0)
+  const searchKey = JSON.stringify([condition, phases, statuses, studyTypes, sponsorClasses, country, fromYear, sortBy])
+  useEffect(() => { setTokens([undefined]); setPageIdx(0) }, [searchKey])
+
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['studies', condition, phases, statuses, studyTypes, sponsorClasses, country, fromYear, sortBy],
+    queryKey: ['studies', searchKey, pageIdx, tokens[pageIdx]],
+    placeholderData: keepPreviousData,
     queryFn: () => api.searchStudies({
       condition,
       phases,
@@ -255,17 +269,27 @@ export function DiscoveryPage() {
       country: country || undefined,
       fromYear,
       sort: sortParam,
-      pageSize: 25,
+      pageSize: PAGE_SIZE,
+      pageToken: tokens[pageIdx],
     }),
     enabled: condition.trim().length >= 2,
   })
 
+  // Remember the token for the page after this one so "Next" can use it.
+  useEffect(() => {
+    if (data?.nextPageToken) {
+      setTokens(prev => (prev[pageIdx + 1] === data.nextPageToken ? prev : [...prev.slice(0, pageIdx + 1), data.nextPageToken]))
+    }
+  }, [data?.nextPageToken, pageIdx])
+  const hasNext = !!data?.nextPageToken
+
   const handleSearch = useCallback(() => {
     if (input.trim().length < 2) return
+    if (/^NCT\d{8}$/i.test(input.trim())) { navigate(`/protocol/${input.trim().toUpperCase()}`); return }
     // Explicit "run now" — commit immediately without waiting for the debounce.
     setCondition(input.trim())
     setCountry(countryInput.trim())
-  }, [input, countryInput])
+  }, [input, countryInput, navigate])
 
   const toggle = <T extends string>(set: T[], val: T, setFn: (v: T[]) => void) =>
     setFn(set.includes(val) ? set.filter(x => x !== val) : [...set, val])
@@ -502,7 +526,7 @@ export function DiscoveryPage() {
             <Sparkles className="w-3.5 h-3.5 text-iq-blue flex-shrink-0" />
             <p className="text-[11px] text-iq-muted">
               <span className="text-iq-navy font-semibold">Smart Search</span>
-              {' '}— Search by condition, drug name, NCT ID, or sponsor. Use Filters to refine by phase, status, study type, sponsor, country, and look-back period.
+              {' '}— Search by condition or disease (paste an NCT ID to open that trial directly). Use Filters to refine by phase, status, study type, sponsor, country, and look-back period.
             </p>
           </div>
         </motion.div>
@@ -587,13 +611,20 @@ export function DiscoveryPage() {
             {!loading && data && data.studies.length > 0 && (
               <div className="px-5 py-3 border-t border-iq-border bg-iq-bg flex items-center gap-6 text-[11px] text-iq-muted">
                 <span className="flex items-center gap-1.5"><Users className="w-3 h-3" />
-                  Showing {data.studies.length} of {data.totalCount.toLocaleString()}
+                  Showing {(pageIdx * PAGE_SIZE + 1).toLocaleString()}–{(pageIdx * PAGE_SIZE + data.studies.length).toLocaleString()} of {data.totalCount.toLocaleString()}
                 </span>
                 <span className="flex items-center gap-1.5"><Building2 className="w-3 h-3" />
                   {[...new Set(data.studies.map(s => s.sponsor.class))].join(' · ')}
                 </span>
                 <span className="flex items-center gap-1.5"><MapPin className="w-3 h-3" />
-                  {[...new Set(data.studies.flatMap(s => Object.keys(s.countries)))].length} countries
+                  {[...new Set(data.studies.flatMap(s => Object.keys(s.countries)))].length} countries on this page
+                </span>
+                <span className="ml-auto flex items-center gap-2">
+                  <button className="btn-ghost text-[11px] py-1 px-2 disabled:opacity-40" disabled={pageIdx === 0 || isFetching}
+                    onClick={() => setPageIdx(i => Math.max(0, i - 1))}>← Previous</button>
+                  <span>Page {pageIdx + 1}</span>
+                  <button className="btn-ghost text-[11px] py-1 px-2 disabled:opacity-40" disabled={!hasNext || isFetching}
+                    onClick={() => setPageIdx(i => i + 1)}>Next →</button>
                 </span>
               </div>
             )}

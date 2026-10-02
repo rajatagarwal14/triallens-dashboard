@@ -4,7 +4,7 @@
 # Node, no version-matching, nothing else to install.
 
 # ── Stage 1: build the frontend (React + Vite) ───────────────────────────────
-FROM node:20-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci

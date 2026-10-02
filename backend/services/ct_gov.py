@@ -1,6 +1,7 @@
 import asyncio
 import re
 import httpx
+from services.http import client as http_client
 from cachetools import TTLCache
 from typing import Optional, Dict, List
 
@@ -324,7 +325,7 @@ async def search_studies(
             if key in _cache:
                 return _cache[key]
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with http_client(30.0) as client:
                 raw = await _fetch(client, f"{CT_BASE}/studies", params=params)
 
             studies = [_norm_study(s) for s in raw.get("studies", [])]
@@ -349,7 +350,7 @@ async def get_study(nct_id: str) -> dict:
     cache_key = f"study:{nct}"
     if cache_key in _cache:
         return _cache[cache_key]
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with http_client(30.0) as client:
         try:
             raw = await _fetch(client, f"{CT_BASE}/studies/{nct}")
         except CTGovError as e:
@@ -391,7 +392,7 @@ async def fetch_page(
     if client is not None:
         raw = await _fetch(client, f"{CT_BASE}/studies", params=params)
     else:
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        async with http_client(60.0) as c:
             raw = await _fetch(c, f"{CT_BASE}/studies", params=params)
     studies = await asyncio.to_thread(lambda: [_norm_study(x) for x in raw.get("studies", [])])
     return {"studies": studies, "totalCount": raw.get("totalCount", 0),

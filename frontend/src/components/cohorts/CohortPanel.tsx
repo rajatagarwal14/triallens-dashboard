@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList,
 } from 'recharts'
 import { Layers, Pencil, Check, RotateCcw, Gauge, Clock, OctagonX, Sparkles } from 'lucide-react'
+import { useAnalytics } from '@/hooks/useAnalytics'
 import { api } from '@/api/client'
 import { clsx } from 'clsx'
 import type { CohortGroup } from '@/types'
@@ -20,14 +21,14 @@ export function CohortPanel({ params }: { params: Record<string, string | number
   const [dropped, setDropped] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<string | null>(null)
 
-  const query = useMemo(() => ({ ...params, ...(axis ? { axis } : {}) }), [params, axis])
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['cohorts', query],
-    queryFn: () => api.getCohorts(query),
-  })
+  const query = useMemo(() => ({ ...params, ...(axis ? { axis } : {}) }), [JSON.stringify(params), axis]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { data, isLoading, isError } = useAnalytics(['cohorts', query], () => api.getCohorts(query))
 
   // Reset per-cohort edits whenever the axis or the underlying search changes.
-  useEffect(() => { setRenames({}); setDropped(new Set()); setEditing(null) }, [axis, params])
+  // Keyed on the serialised params, not their object identity: parents rebuild `params`
+  // on every render, which used to wipe the user's renames/drops immediately.
+  const paramsKey = JSON.stringify(params)
+  useEffect(() => { setRenames({}); setDropped(new Set()); setEditing(null) }, [axis, paramsKey])
 
   const groups = (data?.groups ?? []).filter(g => !dropped.has(g.key))
   const nameOf = (g: CohortGroup) => renames[g.key] ?? g.label

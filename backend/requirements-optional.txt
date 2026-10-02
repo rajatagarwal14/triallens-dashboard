@@ -6,3 +6,8 @@
 #   pip install -r requirements-optional.txt
 
 anthropic>=0.69,<1
+
+# Corporate networks that inspect HTTPS with a company certificate installed in the
+# Windows certificate store: install this, then set TRIALLENS_USE_SYSTEM_CERTS=1
+# (see README → "Company networks"). TLS verification stays ON.
+truststore>=0.9; python_version >= "3.10"

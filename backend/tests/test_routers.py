@@ -114,7 +114,7 @@ def test_phase_chart_counts_each_trial_once_including_phase_less(api):
     d = api(studies).get("/api/landscape/?condition=x").json()
     assert d["phaseCounts"] == {"NA": 1, "PHASE2/PHASE3": 1, "PHASE2": 1}
     assert sum(d["phaseCounts"].values()) == 3
-    assert d["phaseLabels"]["PHASE2/PHASE3"] == "Phase 2/3"
+    assert d["phaseLabels"]["PHASE2/PHASE3"] == "Phase II/III"
 
 
 def test_landscape_reports_median_not_mean(api):

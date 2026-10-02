@@ -14,6 +14,13 @@ import { api } from '@/api/client'
 import type { Study, SimilarStudy } from '@/types'
 import { clsx } from 'clsx'
 
+function formatAgeRange(min: number | null, max: number | null): string {
+  if (min == null && max == null) return 'Not specified'
+  if (max == null) return `${min}+ yrs`
+  if (min == null) return `up to ${max} yrs`
+  return `${min} – ${max} yrs`
+}
+
 function ComplexityGauge({ score }: { score: number }) {
   const pct = (score / 10) * 100
   const color = score < 4 ? '#10b981' : score < 7 ? '#f59e0b' : '#ef4444'
@@ -94,7 +101,7 @@ function SimilarCard({ similar, index, onClick }: { similar: SimilarStudy; index
 
 function EligibilityPanel({ nctId }: { nctId: string }) {
   const [tab, setTab] = useState<'inclusion' | 'exclusion' | 'extracted'>('extracted')
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['eligibility', nctId],
     queryFn: () => api.getEligibility(nctId),
   })
@@ -125,6 +132,8 @@ function EligibilityPanel({ nctId }: { nctId: string }) {
               <div key={i} className="h-3 bg-iq-bg rounded" style={{ width: `${60 + i * 8}%` }} />
             ))}
           </div>
+        ) : isError ? (
+          <ErrorState compact error={error} onRetry={() => refetch()} />
         ) : (
           <AnimatePresence mode="wait">
             {tab === 'extracted' && extracted && (
@@ -164,7 +173,7 @@ function EligibilityPanel({ nctId }: { nctId: string }) {
                       <Users className="w-3 h-3" /> Age Range
                     </p>
                     <p className="text-sm font-semibold text-iq-navy">
-                      {extracted.ageRange.min ?? '?'} – {extracted.ageRange.max ?? '?'} yrs
+                      {formatAgeRange(extracted.ageRange.min, extracted.ageRange.max)}
                     </p>
                   </div>
 
@@ -259,7 +268,7 @@ function EligibilityPanel({ nctId }: { nctId: string }) {
             {tab === 'exclusion' && (
               <motion.div key="exclusion" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <p className="text-[11px] text-iq-text whitespace-pre-wrap leading-relaxed">
-                  {extracted?.exclusionText || 'No exclusion criteria extracted'}
+                  {extracted?.exclusionText || 'This record does not list a separate exclusion section.'}
                 </p>
               </motion.div>
             )}

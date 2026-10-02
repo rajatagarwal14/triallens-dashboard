@@ -161,7 +161,7 @@ def _compute(studies: list, today: datetime.date = None) -> dict:
         })
 
     # 4. Enrollment feasibility (pace)
-    p3_pace = next((e for e in enrollment_rate if e["phase"] == "Phase 3"), None) or (enrollment_rate[0] if enrollment_rate else None)
+    p3_pace = next((e for e in enrollment_rate if e["phase"] == _PHASE_LABEL["PHASE3"]), None) or (enrollment_rate[0] if enrollment_rate else None)
     if p3_pace:
         insights.append({
             "kind": "feasibility", "title": "Enrollment feasibility",
@@ -182,7 +182,7 @@ def _compute(studies: list, today: datetime.date = None) -> dict:
 
     # 6. Enrollment sizing
     if enrollment_benchmarks:
-        p3 = next((e for e in enrollment_benchmarks if e["phase"] == "Phase 3"), None)
+        p3 = next((e for e in enrollment_benchmarks if e["phase"] == _PHASE_LABEL["PHASE3"]), None)
         if p3:
             insights.append({
                 "kind": "enrollment", "title": "Enrollment size benchmark",

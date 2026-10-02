@@ -16,9 +16,9 @@ from services import status as st
 PHASE_ORDER = ["EARLY_PHASE1", "PHASE1", "PHASE1/PHASE2", "PHASE2", "PHASE2/PHASE3",
                "PHASE3", "PHASE4", "NA"]
 PHASE_LABEL = {
-    "EARLY_PHASE1": "Early Phase 1", "PHASE1": "Phase 1", "PHASE1/PHASE2": "Phase 1/2",
-    "PHASE2": "Phase 2", "PHASE2/PHASE3": "Phase 2/3", "PHASE3": "Phase 3",
-    "PHASE4": "Phase 4", "NA": "N/A",
+    "EARLY_PHASE1": "Early Phase I", "PHASE1": "Phase I", "PHASE1/PHASE2": "Phase I/II",
+    "PHASE2": "Phase II", "PHASE2/PHASE3": "Phase II/III", "PHASE3": "Phase III",
+    "PHASE4": "Phase IV", "NA": "N/A",
 }
 _RANK = {"EARLY_PHASE1": 0, "PHASE1": 1, "PHASE2": 2, "PHASE3": 3, "PHASE4": 4, "NA": 9}
 

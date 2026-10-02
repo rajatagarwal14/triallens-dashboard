@@ -52,6 +52,7 @@ import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+from services.http import client as http_client
 from services import ct_gov
 from services.ct_gov import CTGovError
 
@@ -354,6 +355,8 @@ class DatasetManager:
             ds.state = "paused"          # the process died mid-retrieval
         if not ds.studies and ds.state == "complete" and ds.total:
             ds.state, ds.next_token = "paused", None
+        if ds.studies and (not ds.total or ds.total < len(ds.studies)):
+            ds.total = len(ds.studies)   # repairs caches written by the earlier total=0 bug
         ds.version = 1 if ds.studies or ds.state == "complete" else 0
         if ds.version:
             ds.first_page.set()
@@ -482,7 +485,7 @@ class DatasetManager:
         pending: Dict[str, dict] = {}
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with http_client(60.0) as client:
                 if mode == "retrieve":
                     await self._retrieve(ds, client)
                 elif mode == "update":
@@ -555,7 +558,8 @@ class DatasetManager:
                     continue
                 raise
             new = self._merge(page, ds.studies)
-            ds.total = page.get("totalCount", ds.total)
+            # CT.gov reports totalCount on the FIRST page only; later pages come back with 0/absent.
+            ds.total = page.get("totalCount") or ds.total
             ds.next_token = page.get("nextPageToken")
             ds.pages += 1
             ds.last_page_at = time.time()
@@ -601,7 +605,7 @@ class DatasetManager:
         total = ds.total
         while True:
             page = await self._page_with_retry(ds, token, client, {})
-            total = page.get("totalCount", total)
+            total = page.get("totalCount") or total
             self._merge(page, fresh)
             token = page.get("nextPageToken")
             if not token or len(fresh) >= ds.cap:
