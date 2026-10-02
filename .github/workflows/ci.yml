@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, v2]
+    branches: [main, v2, ci-windows]
   pull_request:
 
 jobs:
