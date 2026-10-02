@@ -85,11 +85,11 @@ jobs:
         shell: cmd
         run: |
           start "TrialLens Backend" /b cmd /c "cd /d backend && .venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000"
-          timeout /t 12 /nobreak >nul
+          ping -n 13 127.0.0.1 >nul
           netstat -ano | findstr /r /c:":8000  *[^ ]*  *LISTENING" || exit /b 1
           curl.exe -s -m 3 "http://127.0.0.1:8000/health" | findstr /c:"triallens" || exit /b 1
           call stop.bat /q
-          timeout /t 3 /nobreak >nul
+          ping -n 4 127.0.0.1 >nul
           netstat -ano | findstr /r /c:":8000  *[^ ]*  *LISTENING" && exit /b 1
           exit /b 0
 
@@ -97,7 +97,7 @@ jobs:
         shell: cmd
         run: |
           start "other" /b python -m http.server 8000 --bind 127.0.0.1
-          timeout /t 4 /nobreak >nul
+          ping -n 5 127.0.0.1 >nul
           call stop.bat /q
           netstat -ano | findstr /r /c:":8000  *[^ ]*  *LISTENING" || exit /b 1
           exit /b 0
@@ -107,6 +107,6 @@ jobs:
         run: |
           cd frontend
           start "TrialLens Dashboard" /b cmd /c "npm run dev"
-          timeout /t 15 /nobreak >nul
+          ping -n 16 127.0.0.1 >nul
           curl.exe -s -m 3 "http://127.0.0.1:5173/" | findstr /i /c:"TrialLens" || exit /b 1
           exit /b 0
