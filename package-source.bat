@@ -10,8 +10,8 @@ for %%i in ("%~dp0.") do (
     set "FOLDER=%%~nxi"
     set "PARENT=%%~dpi"
 )
-tar.exe -a -c -f "%OUT%" -C "%PARENT%" ^
+tar.exe -a -c -f "%OUT%" -C "%PARENT%." ^
     --exclude=node_modules --exclude=.venv --exclude=.cache --exclude=dist ^
     --exclude=.git --exclude=__pycache__ --exclude=.pytest_cache ^
-    "%FOLDER%" >nul 2>nul
+    "%FOLDER%" 2>nul
 exit /b %errorlevel%

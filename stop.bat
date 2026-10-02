@@ -23,7 +23,7 @@ if "%FOUND%"=="0" (
 if "%~2"=="backend" (
     curl.exe -s -m 3 "http://127.0.0.1:%~1/health" 2>nul | findstr /c:"triallens" >nul
 ) else (
-    curl.exe -s -m 3 "http://127.0.0.1:%~1/" 2>nul | findstr /i /c:"TrialLens" >nul
+    curl.exe -s -m 3 "http://localhost:%~1/" 2>nul | findstr /i /c:"TrialLens" >nul
 )
 if errorlevel 1 (
     echo   Port %~1 is used by a different program - leaving it alone.
