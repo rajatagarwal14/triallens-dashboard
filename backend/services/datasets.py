@@ -179,11 +179,24 @@ class Dataset:
         self.completed_at: Optional[float] = None
         self.last_page_at: Optional[float] = None
         self.refreshing = False
+        self.bg_attempt_at = 0.0               # last background update/reconcile start
+        self.needs_rewrite = False             # cache file was truncated → compact on resume
         self.version = 0
         self.task: Optional["asyncio.Task"] = None
-        self.first_page = asyncio.Event()
+        # Created lazily ON the event loop: Python 3.9's asyncio.Event binds to the loop of the
+        # thread that creates it, and datasets may be built in a worker thread (disk load).
+        self._first_page: Optional[asyncio.Event] = None
+        self._first_ready = False
         self.last_access = time.time()
         self.last_touch = 0.0
+
+    @property
+    def first_page(self) -> "asyncio.Event":
+        if self._first_page is None:
+            self._first_page = asyncio.Event()
+            if self._first_ready:
+                self._first_page.set()
+        return self._first_page
 
     def coverage(self) -> dict:
         n = len(self.studies)
@@ -221,7 +234,7 @@ class DatasetManager:
 
     # -- public API ----------------------------------------------------------
     async def snapshot(self, filters: Filters, *, wait_first: bool = True) -> Snapshot:
-        ds = self._get(filters)
+        ds = await self._aget(filters)
         ds.last_access = time.time()
         self._touch_disk(ds)
         self._ensure_running(ds)
@@ -239,6 +252,18 @@ class DatasetManager:
         """Cheap progress probe for polling — never starts a retrieval."""
         ds = self._peek(filters)
         if ds is None:
+            meta = self._peek_meta(filters)
+            if meta:
+                n = meta.get("count") or 0
+                state = meta.get("state", "paused")
+                if state in ("retrieving", "new"):
+                    state = "paused"
+                return {"state": state, "analyzed": n, "total": meta.get("total") or n,
+                        "isComplete": state == "complete", "retrieved": n,
+                        "capped": state == "capped", "refreshing": False,
+                        "retrievedAt": _iso(meta.get("last_page_at")),
+                        "completedAt": _iso(meta.get("completed_at")),
+                        "error": None, "note": None, "pages": meta.get("pages", 0), "version": 0}
             return {"state": "none", "analyzed": 0, "total": 0, "isComplete": False,
                     "retrieved": 0, "capped": False, "refreshing": False, "retrievedAt": None,
                     "completedAt": None, "error": None, "note": None, "pages": 0, "version": 0}
@@ -246,7 +271,7 @@ class DatasetManager:
 
     async def lift_cap(self, filters: Filters) -> dict:
         """User chose to retrieve everything beyond the safety cap."""
-        ds = self._get(filters)
+        ds = await self._aget(filters)
         ds.uncapped = True
         ds.cap = 10 ** 9
         if ds.state == "capped":
@@ -256,7 +281,7 @@ class DatasetManager:
 
     async def refresh(self, filters: Filters) -> dict:
         """Force an incremental update now (changed records merged by NCT ID)."""
-        ds = self._get(filters)
+        ds = await self._aget(filters)
         if ds.state in ("complete", "capped") and not (ds.task and not ds.task.done()):
             self._start(ds, "update")
         else:
@@ -290,10 +315,25 @@ class DatasetManager:
         return Snapshot(ds.key, studies, total, ds.state, ds.version, ds.coverage())
 
     def _peek(self, filters: Filters) -> Optional[Dataset]:
+        return self._mem.get(filters.key())
+
+    def _peek_meta(self, filters: Filters) -> Optional[dict]:
+        """Progress for a dataset that is only on disk — reads the small meta file, never
+        the (large) study file."""
+        try:
+            return json.loads(self._meta_path(filters.key()).read_text())
+        except Exception:
+            return None
+
+    async def _aget(self, filters: Filters) -> Dataset:
+        """Like _get, but parses a stored dataset off the event loop (a 20k-study file takes
+        seconds and would freeze every other request, including /health)."""
         key = filters.key()
-        if key in self._mem:
-            return self._mem[key]
-        return self._load_from_disk(filters) if self._meta_path(key).exists() else None
+        if key not in self._mem and self._meta_path(key).exists():
+            loaded = await asyncio.to_thread(self._load_from_disk, filters)
+            if key not in self._mem:          # another request may have loaded it meanwhile
+                self._mem[key] = loaded
+        return self._get(filters)
 
     def _get(self, filters: Filters) -> Dataset:
         key = filters.key()
@@ -351,6 +391,7 @@ class DatasetManager:
                 # and resume from the start of that page by re-fetching (dedupe handles it).
                 log.warning("dataset %s truncated — keeping %d records", ds.key, len(ds.studies))
                 ds.state, ds.next_token = "paused", None
+                ds.needs_rewrite = True
         if ds.state in ("retrieving", "new"):
             ds.state = "paused"          # the process died mid-retrieval
         if not ds.studies and ds.state == "complete" and ds.total:
@@ -359,7 +400,7 @@ class DatasetManager:
             ds.total = len(ds.studies)   # repairs caches written by the earlier total=0 bug
         ds.version = 1 if ds.studies or ds.state == "complete" else 0
         if ds.version:
-            ds.first_page.set()
+            ds._first_ready = True
         return ds
 
     def _write_page(self, ds_key: str, filters: Filters, new: List[dict], meta: dict) -> None:
@@ -391,7 +432,7 @@ class DatasetManager:
     def _meta(self, ds: Dataset) -> dict:
         return {"key": ds.key, "total": ds.total, "state": ds.state, "next_token": ds.next_token,
                 "pages": ds.pages, "completed_at": ds.completed_at, "last_page_at": ds.last_page_at,
-                "uncapped": ds.uncapped, "saved_at": time.time()}
+                "uncapped": ds.uncapped, "count": len(ds.studies), "saved_at": time.time()}
 
     def _touch_disk(self, ds: Dataset) -> None:
         now = time.time()
@@ -431,12 +472,18 @@ class DatasetManager:
         if self._running(ds):
             return
         now = time.time()
+        if ds.state == "retrieving":
+            # No live task but still marked retrieving: it was cancelled before its first
+            # step ran (the except-handler never executed). Treat as paused and resume.
+            ds.state = "paused"
         if ds.state in ("new", "paused"):
             self._start(ds, "retrieve")
         elif ds.state == "error":
             if now - ds.error_at >= ERROR_RETRY_AFTER_S:
                 self._start(ds, "retrieve")
         elif ds.state == "complete" and ds.completed_at:
+            if now - ds.bg_attempt_at < ERROR_RETRY_AFTER_S:
+                return                      # a recent background refresh failed — back off
             age = now - ds.completed_at
             if age > RECONCILE_DAYS * 86400:
                 self._start(ds, "reconcile")
@@ -451,7 +498,11 @@ class DatasetManager:
         for other in self._mem.values():
             if other is not ds and self._running(other):
                 other.task.cancel()
+        if mode in ("update", "reconcile"):
+            ds.bg_attempt_at = time.time()
         if mode == "retrieve":
+            if ds.version == 0:
+                ds.first_page.clear()      # so wait_first really waits after an earlier failure
             # Flip to "retrieving" NOW, not when the task first runs — otherwise a status
             # poll in between reports "paused"/"error" for a dataset that is resuming.
             ds.state, ds.error = "retrieving", None
@@ -543,6 +594,9 @@ class DatasetManager:
         await asyncio.to_thread(self._write_page, ds.key, ds.filters, new, self._meta(ds))
 
     async def _retrieve(self, ds: Dataset, client) -> None:
+        if ds.needs_rewrite:        # compact a truncated file once, instead of appending a 2nd copy
+            await asyncio.to_thread(self._rewrite_all, ds.key, ds.filters, list(ds.studies.values()), self._meta(ds))
+            ds.needs_rewrite = False
         ds.state, ds.error = "retrieving", None
         restarted = False
         while True:
@@ -568,7 +622,9 @@ class DatasetManager:
             elif len(ds.studies) >= ds.cap:
                 ds.state = "capped"
             ds.version += 1
-            await self._persist(ds, new)
+            # shield: if this task is cancelled (filters changed) the page that is already
+            # merged in memory must still reach disk, or meta would point past missing rows.
+            await asyncio.shield(self._persist(ds, new))
             ds.first_page.set()
             log.info("dataset %s: page %d, %d/%s studies", ds.key, ds.pages, len(ds.studies), ds.total)
             if ds.state in ("complete", "capped"):
@@ -588,7 +644,7 @@ class DatasetManager:
             new = self._merge(page, ds.studies)
             changed += len(new)
             ds.version += 1
-            await self._persist(ds, new)
+            await asyncio.shield(self._persist(ds, new))
             token = page.get("nextPageToken")
             if not token:
                 break

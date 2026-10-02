@@ -127,7 +127,7 @@ export function CompetitionPage() {
 
         {!isLoading && !isError && data && (
           <div className="flex items-center gap-2">
-            <CoverageBadge coverage={data.coverage} />
+            <CoverageBadge coverage={data.coverage} params={params} />
             <span className="text-[10px] text-iq-muted">
               {data.readoutCount.toLocaleString()} trials with a completion date{(from || to) ? ' in window' : ''}
             </span>

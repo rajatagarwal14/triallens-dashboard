@@ -124,8 +124,9 @@ _RULES = [
     (rf"breast {_C}|mammary {_C}|\btnbc\b|triple[- ]negative|\bdcis\b|ductal carcinoma|lobular carcinoma|"
      r"her2[- ](?:positive|low|\+)|\bhr[- ]?positive", "breast_cancer"),
     (rf"prostat\w* {_C}|\bm?crpc\b|\bmhspc\b|\bmcspc\b", "prostate_cancer"),
-    (rf"(?:colorectal|colon|rectal|rectum|bowel) {_C}|colorectal|\bcrc\b", "colorectal_cancer"),
+    (rf"(?:colorectal|colon|rectal|rectum|bowel) {_C}|\bcrc\b", "colorectal_cancer"),
     (rf"lung {_C}|\bnsclc\b|\bsclc\b|non[- ]small[- ]cell|small[- ]cell lung", "lung_cancer"),
+    (r"(?:uveal|ocular|choroidal|conjunctival|mucosal|intraocular) melanoma", "default"),   # not skin melanoma
     (r"melanoma", "melanoma"),
     (rf"ovarian {_C}|fallopian {_C}|primary peritoneal|epithelial ovarian", "ovarian_cancer"),
     (rf"pancreatic {_C}|\bpdac\b|pancreatic ductal", "pancreatic_cancer"),

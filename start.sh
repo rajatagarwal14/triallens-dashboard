@@ -19,10 +19,14 @@ node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit((
 
 # Never assume whatever is on a port is TrialLens.
 port_busy() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+START_BACKEND=1
 if port_busy 8000; then
-  curl -s -m 3 http://127.0.0.1:8000/health | grep -q triallens \
-    && { echo "  TrialLens backend is already running on :8000."; exit 0; } \
-    || { echo "  Port 8000 is used by another program - not touching it. Free it and re-run."; exit 1; }
+  if curl -s -m 3 http://127.0.0.1:8000/health | grep -q triallens; then
+    echo "  TrialLens backend is already running on :8000 - reusing it."
+    START_BACKEND=0
+  else
+    echo "  Port 8000 is used by another program - not touching it. Free it and re-run."; exit 1
+  fi
 fi
 if port_busy 5173; then
   echo "  Port 5173 is used by another program - not touching it. Free it and re-run."; exit 1
@@ -62,10 +66,13 @@ echo ""
 echo "  Press Ctrl+C to stop both servers."
 echo ""
 
-# Start backend
-cd "$BACKEND"
-"$BACKEND/.venv/bin/uvicorn" main:app --host 127.0.0.1 --port 8000 --reload &
-BACKEND_PID=$!
+# Start backend (unless a TrialLens backend is already up)
+BACKEND_PID=""
+if [ "$START_BACKEND" = "1" ]; then
+  cd "$BACKEND"
+  "$BACKEND/.venv/bin/uvicorn" main:app --host 127.0.0.1 --port 8000 &
+  BACKEND_PID=$!
+fi
 
 # Start frontend
 cd "$FRONTEND"

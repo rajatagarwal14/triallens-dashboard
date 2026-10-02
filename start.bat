@@ -237,7 +237,8 @@ rem ---------------------------------------------------------------------------
 rem :hashof <file> <varname>   SHA-256 of a file, via certutil (built into Windows)
 :hashof
 set "%~2="
-for /f "delims=" %%h in ('certutil -hashfile "%~1" SHA256 2^>nul ^| findstr /v /c:"hash of" /c:"CertUtil"') do (
+rem Pick the hex line itself (works on any Windows display language).
+for /f "delims=" %%h in ('certutil -hashfile "%~1" SHA256 2^>nul ^| findstr /r /i /c:"^[0-9a-f][0-9a-f ]*$"') do (
     if not defined %~2 set "%~2=%%h"
 )
 exit /b 0

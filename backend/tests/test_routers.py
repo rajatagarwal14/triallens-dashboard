@@ -166,3 +166,19 @@ def test_cohort_query_parsing():
     assert _parse_query("HER2 positive breast cancer") == ("breast", ["her2"])
     assert _parse_query("AML")[0] == "myeloid"
     assert _parse_query("myelofibrosis anemia") == ("myelofibrosis", ["anemia"])
+
+
+def test_competition_window_is_a_view_not_a_second_dataset(api):
+    studies = [
+        make_study("NCT00000090", status="RECRUITING", primaryCompletionDate=f"{TODAY.year + 1}-03", primaryCompletionType="ESTIMATED"),
+        make_study("NCT00000091", status="WITHDRAWN", primaryCompletionDate=f"{TODAY.year + 1}-03", primaryCompletionType="ESTIMATED"),
+        make_study("NCT00000092", status="TERMINATED", primaryCompletionDate=f"{TODAY.year + 1}-04", primaryCompletionType="ESTIMATED"),
+        make_study("NCT00000093", status="COMPLETED", primaryCompletionDate=f"{TODAY.year - 1}-05", primaryCompletionType="ACTUAL"),
+    ]
+    c = api(studies)
+    fut = c.get(f"/api/competition/?condition=x&completionFrom={TODAY.isoformat()}&completionTo={TODAY.year + 2}-12-31").json()
+    assert [r["nctId"] for r in fut["readouts"]] == ["NCT00000090"]
+    past = c.get(f"/api/competition/?condition=x&completionFrom={TODAY.year - 1}-01-01&completionTo={TODAY.year - 1}-12-31").json()
+    assert [r["nctId"] for r in past["readouts"]] == ["NCT00000093"]
+    from services import datasets
+    assert len(datasets.manager._mem) == 1                    # one dataset served both windows

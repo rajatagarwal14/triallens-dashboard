@@ -3,6 +3,7 @@ Competitive intelligence keyed on PRIMARY completion dates — the "who reads ou
 when" view. Aggregates a single 1000-study pull into a sponsor leaderboard, a
 readout timeline (by quarter), and an upcoming-readouts list.
 """
+import dataclasses
 import datetime
 from fastapi import APIRouter, Depends, Query
 from collections import defaultdict
@@ -38,8 +39,40 @@ def _bucket(date: str, granularity: str) -> Optional[tuple]:
     return f"{y}-{q}", f"{y} Q{q}"
 
 
-def _compute(studies: list, granularity: str, windowed: bool, today: datetime.date = None) -> dict:
+def _window(frm: Optional[str], to: Optional[str]):
+    def start(s):
+        d = an.period_end(s)
+        if not d:
+            return None
+        parts = s.split("-")
+        return datetime.date(d.year, int(parts[1]) if len(parts) > 1 else 1, int(parts[2][:2]) if len(parts) > 2 else 1)
+    return (start(frm) if frm else None), (an.period_end(to) if to else None)
+
+
+def _counts(s: dict, today: datetime.date, lo, hi):
+    """Does this trial's primary-completion date belong in the chosen window? A FUTURE date
+    only counts for a trial that can still complete (not withdrawn/terminated/completed/
+    suspended/stale) and is an estimate; a PAST date is history and counts as-is."""
+    pcd = s.get("primaryCompletionDate")
+    end = an.period_end(pcd)
+    if end is None:
+        return False
+    if lo and end < lo:
+        return False
+    if hi and end > hi:
+        return False
+    if st.norm(s.get("status")) == "WITHDRAWN":
+        return False
+    if end >= today:
+        return an.upcoming_completion(s, today) is not None
+    return True
+
+
+def _compute(studies: list, granularity: str, frm: Optional[str], to: Optional[str], today: datetime.date = None) -> dict:
     today = today or datetime.date.today()
+    lo, hi = _window(frm, to)
+    windowed = bool(frm or to)
+    in_window = [s for s in studies if _counts(s, today, lo, hi)] if windowed else studies
 
     # ── Sponsor leaderboard ──────────────────────────────────────────────
     sponsors: dict = {}
@@ -67,7 +100,7 @@ def _compute(studies: list, granularity: str, windowed: bool, today: datetime.da
 
     # ── Completion timeline (by month / bi-month / quarter) ──────────────
     timeline: dict = {}
-    for s in studies:
+    for s in in_window:
         bucket = _bucket(s.get("primaryCompletionDate") or "", granularity)
         if bucket:
             key, label = bucket
@@ -80,7 +113,7 @@ def _compute(studies: list, granularity: str, windowed: bool, today: datetime.da
     # is still ahead. When the user picks an explicit completion window we show whatever
     # falls inside it (that is what they asked for), history included.
     rows = []
-    for s in studies:
+    for s in in_window:
         pcd = s.get("primaryCompletionDate")
         if not pcd:
             continue
@@ -113,9 +146,15 @@ def _compute(studies: list, granularity: str, windowed: bool, today: datetime.da
 async def get_competition(
     f: Filters = Depends(common_filters),
     granularity: str = Query("quarter", pattern="^(month|bimonth|quarter)$"),
+    completionFrom: Optional[str] = Query(None),
+    completionTo: Optional[str] = Query(None),
 ):
-    windowed = bool(f.completion_from or f.completion_to)
+    # The completion window is applied here, NOT as a registry filter: the window is part of
+    # the view, so every window edit reuses the same stored dataset instead of triggering a
+    # second full retrieval.
+    base = dataclasses.replace(f, completion_from=None, completion_to=None)
     today = datetime.date.today()
-    out = await analyse(f, "competition", lambda s: _compute(s, granularity, windowed, today),
-                        (granularity, windowed, today.isoformat()))
+    out = await analyse(base, "competition",
+                        lambda s: _compute(s, granularity, completionFrom, completionTo, today),
+                        (granularity, completionFrom, completionTo, today.isoformat()))
     return {**out, "totalCount": out["coverage"]["total"]}

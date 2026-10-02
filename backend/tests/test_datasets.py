@@ -261,3 +261,17 @@ def test_total_survives_pages_that_omit_total_count(tmp_path):
         st = await drain(m, F)
         assert st["total"] == 2500 and st["analyzed"] == 2500 and st["isComplete"]
     asyncio.run(go())
+
+
+def test_task_cancelled_before_first_step_does_not_wedge_the_dataset(tmp_path):
+    async def go():
+        m = mgr(tmp_path, FakeRegistry(n=1500))
+        ds = await m._aget(F)
+        m._start(ds, "retrieve")
+        ds.task.cancel()                       # cancelled before _run ever executed
+        await asyncio.sleep(0)
+        assert ds.state == "retrieving" and ds.task.cancelled()
+        snap = await m.snapshot(F)             # must notice and resume
+        st = await drain(m, F)
+        assert st["state"] == "complete" and st["analyzed"] == 1500
+    asyncio.run(go())

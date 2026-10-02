@@ -6,6 +6,7 @@ import { api } from '@/api/client'
 import { useSharedSearch, filterParams } from '@/context/SearchContext'
 import type { Coverage } from '@/types'
 
+const ANALYTIC_KEYS = new Set(['landscape', 'geo', 'competition', 'research', 'sites', 'cohorts'])
 const BASE = 'inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full border'
 
 function when(iso?: string | null) {
@@ -38,7 +39,8 @@ export function CoverageBadge({ coverage, className, params }: {
     setBusy(true)
     try { await fn(q) } finally {
       setBusy(false)
-      qc.invalidateQueries()   // re-pull every analytic so it picks up the new dataset version
+      // re-pull the analytics only (not Discovery search / prevalence) for the new dataset version
+      qc.invalidateQueries({ predicate: q => ANALYTIC_KEYS.has(String(q.queryKey[0])) })
     }
   }
   const pct = total > 0 ? Math.min(100, Math.round((analyzed / total) * 100)) : 0

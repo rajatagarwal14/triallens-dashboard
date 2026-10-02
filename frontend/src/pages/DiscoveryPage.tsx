@@ -252,12 +252,18 @@ export function DiscoveryPage() {
 
   // Token pagination: tokens[i] fetches page i (page 0 has no token). Any change to the
   // search, filters or sort starts again from page 1.
-  const [tokens, setTokens] = useState<(string | undefined)[]>([undefined])
-  const [pageIdx, setPageIdx] = useState(0)
   const searchKey = JSON.stringify([condition, phases, statuses, studyTypes, sponsorClasses, country, fromYear, sortBy])
-  useEffect(() => { setTokens([undefined]); setPageIdx(0) }, [searchKey])
+  const [pager, setPager] = useState<{ key: string; tokens: (string | undefined)[]; idx: number }>(
+    { key: searchKey, tokens: [undefined], idx: 0 })
+  // State tagged with the search it belongs to: when the search changes we are on page 1
+  // immediately (no wasted request carrying the previous search's page token).
+  const fresh = pager.key === searchKey
+  const tokens = fresh ? pager.tokens : [undefined]
+  const pageIdx = fresh ? pager.idx : 0
+  const setPageIdx = (fn: (i: number) => number) =>
+    setPager(p => ({ key: searchKey, tokens: p.key === searchKey ? p.tokens : [undefined], idx: fn(p.key === searchKey ? p.idx : 0) }))
 
-  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData, isError, error, refetch } = useQuery({
     queryKey: ['studies', searchKey, pageIdx, tokens[pageIdx]],
     placeholderData: keepPreviousData,
     queryFn: () => api.searchStudies({
@@ -277,10 +283,15 @@ export function DiscoveryPage() {
 
   // Remember the token for the page after this one so "Next" can use it.
   useEffect(() => {
-    if (data?.nextPageToken) {
-      setTokens(prev => (prev[pageIdx + 1] === data.nextPageToken ? prev : [...prev.slice(0, pageIdx + 1), data.nextPageToken]))
-    }
-  }, [data?.nextPageToken, pageIdx])
+    const next = data?.nextPageToken
+    if (!next || isPlaceholderData) return   // placeholder = previous search's page; its token is not ours
+    setPager(p => {
+      const base = p.key === searchKey ? p : { key: searchKey, tokens: [undefined], idx: 0 }
+      return base.tokens[pageIdx + 1] === next
+        ? base
+        : { ...base, tokens: [...base.tokens.slice(0, pageIdx + 1), next] }
+    })
+  }, [data?.nextPageToken, pageIdx, searchKey, isPlaceholderData])
   const hasNext = !!data?.nextPageToken
 
   const handleSearch = useCallback(() => {

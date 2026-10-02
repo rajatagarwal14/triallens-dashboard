@@ -463,7 +463,7 @@ export function GeoPage() {
         {/* Coverage disclosure */}
         {!isLoading && !isError && data && (
           <div className="flex-shrink-0 flex items-center gap-2">
-            <CoverageBadge coverage={data.coverage} />
+            <CoverageBadge coverage={data.coverage} params={geoQuery} />
             {(mapMode === 'prevalence' || mapMode === 'intensity') && prevData?.found && prevData?.modeled && (
               <span className="text-[10px] text-iq-muted flex items-center gap-1">
                 <Cpu className="w-2.5 h-2.5 text-iq-blue" /> Modeled prevalence (epidemiology engine) — no AI key needed

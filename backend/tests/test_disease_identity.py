@@ -60,3 +60,15 @@ def test_country_tables_use_the_registry_spelling():
         assert name in epidemiology._POP_M, name
     assert "Turkey (Türkiye)" in prevalence.lookup("Type 2 Diabetes")
     assert "Turkey" not in epidemiology._POP_M and "Russian Federation" not in epidemiology._POP_M
+
+
+def test_sclc_is_not_served_all_lung_cancer_as_exact():
+    out = prevalence.lookup("Small Cell Lung Cancer")
+    first = next(iter(out.values())) if out else None
+    assert first is None or first.get("matchType") == "parent"      # upper bound, flagged
+
+
+def test_polyps_and_uveal_melanoma_are_not_cancers_we_model():
+    assert epidemiology.classify("Colorectal Polyps") != "colorectal_cancer"
+    assert epidemiology.classify("Uveal Melanoma") != "melanoma"
+    assert epidemiology.classify("Colorectal Cancer") == "colorectal_cancer"
