@@ -3,16 +3,15 @@ Competitive intelligence keyed on PRIMARY completion dates — the "who reads ou
 when" view. Aggregates a single 1000-study pull into a sponsor leaderboard, a
 readout timeline (by quarter), and an upcoming-readouts list.
 """
-from fastapi import APIRouter, Query
-from typing import Optional
+import datetime
+from fastapi import APIRouter, Depends, Query
 from collections import defaultdict
-from services import ct_gov
+from typing import Optional
+from services import analytics as an, status as st
+from services.datasets import Filters
+from routers._common import common_filters, analyse
 
 router = APIRouter()
-
-
-def _csv(v: Optional[str]):
-    return v.split(",") if v else None
 
 
 _MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -39,44 +38,24 @@ def _bucket(date: str, granularity: str) -> Optional[tuple]:
     return f"{y}-{q}", f"{y} Q{q}"
 
 
-@router.get("/")
-async def get_competition(
-    condition: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    phases: Optional[str] = Query(None),
-    studyTypes: Optional[str] = Query(None),
-    sponsorClasses: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    fromYear: Optional[int] = Query(None, ge=2000, le=2030),
-    completionFrom: Optional[str] = Query(None),
-    completionTo: Optional[str] = Query(None),
-    granularity: str = Query("quarter", pattern="^(month|bimonth|quarter)$"),
-):
-    result = await ct_gov.search_studies(
-        condition=condition, status=_csv(status), phases=_csv(phases),
-        study_types=_csv(studyTypes), sponsor_classes=_csv(sponsorClasses),
-        country=country, from_year=fromYear,
-        completion_from=completionFrom, completion_to=completionTo,
-        page_size=1000,
-    )
-    studies = result["studies"]
+def _compute(studies: list, granularity: str, windowed: bool, today: datetime.date = None) -> dict:
+    today = today or datetime.date.today()
 
     # ── Sponsor leaderboard ──────────────────────────────────────────────
-    sponsors: dict[str, dict] = {}
+    sponsors: dict = {}
     for s in studies:
-        name = s.get("sponsor", {}).get("name") or "Unknown"
-        cls = s.get("sponsor", {}).get("class") or "OTHER"
+        name = (s.get("sponsor") or {}).get("name") or "Unknown"
+        cls = (s.get("sponsor") or {}).get("class") or "OTHER"
         e = sponsors.setdefault(name, {
             "sponsor": name, "class": cls, "trials": 0,
             "phases": defaultdict(int), "statuses": defaultdict(int),
             "enrollment": 0, "lateStage": 0,
         })
         e["trials"] += 1
-        for ph in (s.get("phases") or ["NA"]):
-            e["phases"][ph] += 1
-            if ph in ("PHASE3", "PHASE4"):
-                e["lateStage"] += 1
-        e["statuses"][s.get("status", "Unknown")] += 1
+        e["phases"][an.phase_key(s)] += 1
+        if an.is_late_stage(s):
+            e["lateStage"] += 1          # once per trial
+        e["statuses"][s.get("status") or "Unknown"] += 1
         enroll = (s.get("enrollment") or {}).get("count")
         if enroll:
             e["enrollment"] += enroll
@@ -87,7 +66,7 @@ async def get_competition(
         e["statuses"] = dict(e["statuses"])
 
     # ── Completion timeline (by month / bi-month / quarter) ──────────────
-    timeline: dict[str, dict] = {}
+    timeline: dict = {}
     for s in studies:
         bucket = _bucket(s.get("primaryCompletionDate") or "", granularity)
         if bucket:
@@ -96,30 +75,47 @@ async def get_competition(
             e["count"] += 1
     timeline_sorted = [v for k, v in sorted(timeline.items(), key=lambda kv: kv[0])]
 
-    # ── Upcoming readouts (soonest primary completion first) ─────────────
-    readouts = [
-        {
-            "nctId": s["nctId"], "title": s["title"],
-            "sponsor": s.get("sponsor", {}).get("name", ""),
-            "sponsorClass": s.get("sponsor", {}).get("class", ""),
-            "phase": (s.get("phases") or ["NA"])[0],
+    # ── Readouts list (soonest first) ────────────────────────────────────
+    # Default view = genuinely UPCOMING: still-active trials with an estimated date that
+    # is still ahead. When the user picks an explicit completion window we show whatever
+    # falls inside it (that is what they asked for), history included.
+    rows = []
+    for s in studies:
+        pcd = s.get("primaryCompletionDate")
+        if not pcd:
+            continue
+        if not windowed and an.upcoming_completion(s, today) is None:
+            continue
+        rows.append({
+            "nctId": s["nctId"], "title": s.get("title", ""),
+            "sponsor": (s.get("sponsor") or {}).get("name", ""),
+            "sponsorClass": (s.get("sponsor") or {}).get("class", ""),
+            "phase": an.phase_key(s),
             "status": s.get("status", ""),
             "enrollment": (s.get("enrollment") or {}).get("count"),
-            "primaryCompletionDate": s.get("primaryCompletionDate"),
-            "primaryCompletionType": s.get("primaryCompletionType"),
+            "primaryCompletionDate": pcd,
+            "primaryCompletionType": s.get("primaryCompletionType") or None,
             "countryCount": s.get("countryCount", 0),
-        }
-        for s in studies if s.get("primaryCompletionDate")
-    ]
-    readouts.sort(key=lambda r: r["primaryCompletionDate"])
+        })
+    rows.sort(key=lambda r: r["primaryCompletionDate"])
 
-    total = result["totalCount"]
-    analyzed = len(studies)
     return {
-        "coverage": {"analyzed": analyzed, "total": total, "isComplete": analyzed >= total},
-        "totalCount": total,
         "leaderboard": leaderboard,
         "timeline": timeline_sorted,
-        "readouts": readouts[:80],
-        "readoutCount": len(readouts),
+        "readouts": rows[:80],
+        "readoutCount": len(rows),
+        "readoutMode": "window" if windowed else "upcoming",
+        "phaseLabels": an.PHASE_LABEL,
     }
+
+
+@router.get("/")
+async def get_competition(
+    f: Filters = Depends(common_filters),
+    granularity: str = Query("quarter", pattern="^(month|bimonth|quarter)$"),
+):
+    windowed = bool(f.completion_from or f.completion_to)
+    today = datetime.date.today()
+    out = await analyse(f, "competition", lambda s: _compute(s, granularity, windowed, today),
+                        (granularity, windowed, today.isoformat()))
+    return {**out, "totalCount": out["coverage"]["total"]}

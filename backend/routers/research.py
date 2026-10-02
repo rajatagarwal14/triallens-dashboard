@@ -6,56 +6,27 @@ duration, discontinuation, enrollment-size and enrollment-pace benchmarks and
 geographic activity. All derived from the same 1000-study pull.
 """
 import datetime
-from fastapi import APIRouter, Query
-from typing import Optional
+from fastapi import APIRouter, Depends
 from collections import defaultdict
-from statistics import median
-from services import ct_gov
+from services import analytics as an, status as st
+from services.datasets import Filters
+from routers._common import common_filters, analyse
 
 router = APIRouter()
 
-_PHASE_ORDER = ["EARLY_PHASE1", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "NA"]
-_PHASE_LABEL = {
-    "EARLY_PHASE1": "Early Phase 1", "PHASE1": "Phase 1", "PHASE2": "Phase 2",
-    "PHASE3": "Phase 3", "PHASE4": "Phase 4", "NA": "N/A",
-}
+_PHASE_ORDER = an.PHASE_ORDER
+_PHASE_LABEL = an.PHASE_LABEL
+_median = an.median
 
 
-def _csv(v: Optional[str]):
-    return v.split(",") if v else None
-
-
-def _months_between(start: str, end: str) -> Optional[int]:
-    try:
-        sy, sm = int(start[:4]), int(start[5:7]) if len(start) >= 7 else 1
-        ey, em = int(end[:4]), int(end[5:7]) if len(end) >= 7 else 1
-    except (ValueError, IndexError):
-        return None
-    m = (ey - sy) * 12 + (em - sm)
-    return m if m >= 0 else None
-
-
-@router.get("/")
-async def get_research(
-    condition: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    phases: Optional[str] = Query(None),
-    studyTypes: Optional[str] = Query(None),
-    sponsorClasses: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    fromYear: Optional[int] = Query(None, ge=2000, le=2030),
-):
-    result = await ct_gov.search_studies(
-        condition=condition, status=_csv(status), phases=_csv(phases),
-        study_types=_csv(studyTypes), sponsor_classes=_csv(sponsorClasses),
-        country=country, from_year=fromYear, page_size=1000,
-    )
-    studies = result["studies"]
+def _compute(studies: list, today: datetime.date = None) -> dict:
+    today = today or datetime.date.today()
     n = len(studies)
-    this_year = datetime.date.today().year
+    this_year = today.year
+    horizon_end = an.add_months(today, 24)
 
     # ── Phase-3 momentum (for the competitive-heat insight) ──────────────
-    phase3_by_year: dict[int, int] = defaultdict(int)
+    phase3_by_year: dict = defaultdict(int)
     for s in studies:
         sd = s.get("startDate")
         if sd and sd[:4].isdigit():
@@ -64,61 +35,52 @@ async def get_research(
                 phase3_by_year[y] += 1
     hist_years = sorted(y for y in phase3_by_year if y <= this_year - 1)
 
-    # ── Expected trial readouts by year (ACCURATE — real scheduled dates) ─
-    # Count trials whose PRIMARY completion is registered in each upcoming year,
-    # split by phase. This is a forward count of already-scheduled readouts, NOT
-    # an extrapolation — it tells a planner when competitor data will land.
+    # ── Expected trial readouts (real registered dates, status-aware) ────
+    # A readout counts only if the trial can still complete (recruiting / active /
+    # not yet recruiting), the date is the sponsor's ESTIMATE, and it is still ahead of
+    # today. Completed / terminated / withdrawn / suspended / stale trials are excluded.
     HORIZON = 5
     readout_years = list(range(this_year, this_year + HORIZON))
-    readout_by_year: dict[int, dict] = {
+    readout_by_year: dict = {
         y: {"year": y, **{p: 0 for p in _PHASE_ORDER}} for y in readout_years
     }
     upcoming_total = upcoming_phase3 = 0
     for s in studies:
-        pcd = s.get("primaryCompletionDate")
-        if not (pcd and pcd[:4].isdigit()):
+        end = an.upcoming_completion(s, today)
+        if end is None:
             continue
-        y = int(pcd[:4])
-        if y in readout_by_year:
-            p = (s.get("phases") or ["NA"])[0]
-            if p not in _PHASE_ORDER:
-                p = "NA"
-            readout_by_year[y][p] += 1
-            # "upcoming" = within the next 24 months
-            if y <= this_year + 1:
-                upcoming_total += 1
-                if p == "PHASE3":
-                    upcoming_phase3 += 1
+        p = an.phase_key(s)
+        if end.year in readout_by_year:
+            readout_by_year[end.year][p if p in _PHASE_ORDER else "NA"] += 1
+        if end <= horizon_end:              # rolling 24 months, not calendar-year buckets
+            upcoming_total += 1
+            if an.is_late_stage(s):
+                upcoming_phase3 += 1
     for y in readout_by_year:
         readout_by_year[y]["total"] = sum(readout_by_year[y][p] for p in _PHASE_ORDER)
     readout_forecast = [readout_by_year[y] for y in readout_years]
-    # phases actually present (non-zero anywhere), for the chart legend/stacking
     readout_phases = [p for p in _PHASE_ORDER
                       if any(readout_by_year[y][p] for y in readout_years)]
 
     # ── Time-to-completion (months, start → primary completion) by phase ─
-    dur_by_phase: dict[str, list] = defaultdict(list)
+    dur_by_phase: dict = defaultdict(list)
     for s in studies:
-        start, pcd = s.get("startDate"), s.get("primaryCompletionDate")
-        if start and pcd:
-            m = _months_between(start, pcd)
-            if m is not None and m <= 240:
-                dur_by_phase[(s.get("phases") or ["NA"])[0]].append(m)
+        m = an.months_between(s.get("startDate"), s.get("primaryCompletionDate"))
+        if m is not None:
+            dur_by_phase[an.phase_key(s)].append(m)
     time_to_completion = [
-        {"phase": _PHASE_LABEL.get(p, p), "medianMonths": round(median(v)), "n": len(v)}
+        {"phase": _PHASE_LABEL.get(p, p), "medianMonths": round(_median(v)), "n": len(v)}
         for p in _PHASE_ORDER if (v := dur_by_phase.get(p))
     ]
 
     # ── Trial discontinuation by phase (terminated + withdrawn + suspended) ─
-    # NB: this is TRIAL-level early-stop, the correct clinical-ops term is
-    # "discontinuation/termination" — NOT "attrition" (which means patient dropout).
-    total_by_phase: dict[str, int] = defaultdict(int)
-    dropped_by_phase: dict[str, int] = defaultdict(int)
-    dead = {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
+    # TRIAL-level early stop — not "attrition" (which means patient dropout).
+    total_by_phase: dict = defaultdict(int)
+    dropped_by_phase: dict = defaultdict(int)
     for s in studies:
-        p = (s.get("phases") or ["NA"])[0]
+        p = an.phase_key(s)
         total_by_phase[p] += 1
-        if s.get("status") in dead:
+        if st.norm(s.get("status")) in st.DISCONTINUED:
             dropped_by_phase[p] += 1
     discontinuation = [
         {"phase": _PHASE_LABEL.get(p, p), "rate": round(dropped_by_phase[p] / total_by_phase[p] * 100),
@@ -126,32 +88,31 @@ async def get_research(
         for p in _PHASE_ORDER if total_by_phase.get(p)
     ]
 
-    # ── Enrollment size benchmarks (median target) by phase ──────────────
-    enroll_by_phase: dict[str, list] = defaultdict(list)
-    # ── Enrollment PACE: patients per site per month (feasibility) by phase ─
-    pace_by_phase: dict[str, list] = defaultdict(list)
+    # ── Enrollment size benchmarks (median target) and pace by phase ─────
+    enroll_by_phase: dict = defaultdict(list)
+    pace_by_phase: dict = defaultdict(list)
     for s in studies:
-        p = (s.get("phases") or ["NA"])[0]
+        p = an.phase_key(s)
         c = (s.get("enrollment") or {}).get("count")
         if c and c > 0:
             enroll_by_phase[p].append(c)
-            sites = s.get("siteCount") or 0
-            mo = _months_between(s.get("startDate") or "", s.get("primaryCompletionDate") or "")
+            sites = s.get("siteCount") or 0          # ALL registered locations
+            mo = an.months_between(s.get("startDate"), s.get("primaryCompletionDate"))
             if sites > 0 and mo and mo > 0:
                 rate = c / sites / mo
                 if 0 < rate <= 50:  # drop implausible outliers
                     pace_by_phase[p].append(rate)
     enrollment_benchmarks = [
-        {"phase": _PHASE_LABEL.get(p, p), "median": round(median(v)), "n": len(v)}
+        {"phase": _PHASE_LABEL.get(p, p), "median": round(_median(v)), "n": len(v)}
         for p in _PHASE_ORDER if (v := enroll_by_phase.get(p))
     ]
     enrollment_rate = [
-        {"phase": _PHASE_LABEL.get(p, p), "perSiteMonth": round(median(v), 2), "n": len(v)}
+        {"phase": _PHASE_LABEL.get(p, p), "perSiteMonth": round(_median(v), 2), "n": len(v)}
         for p in _PHASE_ORDER if (v := pace_by_phase.get(p))
     ]
 
     # ── Geographic activity ──────────────────────────────────────────────
-    country_counts: dict[str, int] = defaultdict(int)
+    country_counts: dict = defaultdict(int)
     for s in studies:
         for c in (s.get("countries") or {}):
             if c and c != "Unknown":
@@ -172,10 +133,10 @@ async def get_research(
     if upcoming_total:
         insights.append({
             "kind": "trend", "title": "Upcoming trial completions",
-            "detail": f"{upcoming_total} trial{'s' if upcoming_total != 1 else ''} in this indication "
-                      f"{'are' if upcoming_total != 1 else 'is'} scheduled to reach primary completion in the next ~24 months"
-                      + (f", including {upcoming_phase3} Phase 3 trial{'s' if upcoming_phase3 != 1 else ''}" if upcoming_phase3 else "")
-                      + " — key competitor studies finishing soon.",
+            "detail": f"{upcoming_total} active trial{'s' if upcoming_total != 1 else ''} in this indication "
+                      f"{'are' if upcoming_total != 1 else 'is'} estimated to reach primary completion within the next 24 months"
+                      + (f", including {upcoming_phase3} late-stage (Phase 3/4) trial{'s' if upcoming_phase3 != 1 else ''}" if upcoming_phase3 else "")
+                      + ". Dates are the sponsors' own estimates and often slip.",
         })
 
     # 2. Phase 3 momentum (late-stage activity)
@@ -185,7 +146,7 @@ async def get_research(
         chg = round((p3_recent - p3_prior) / p3_prior * 100)
         insights.append({
             "kind": "latestage", "title": "Late-stage (Phase 3) momentum",
-            "detail": f"Phase 3 trial starts are {'up' if chg >= 0 else 'down'} {abs(chg)}% over the last 3 years "
+            "detail": f"Phase 3 (incl. Phase 2/3) trial starts are {'up' if chg >= 0 else 'down'} {abs(chg)}% over the last 3 years "
                       f"vs the prior 3 — the late-stage pipeline is {'heating up' if chg >= 0 else 'cooling'}.",
         })
 
@@ -211,7 +172,7 @@ async def get_research(
     # 5. Trial discontinuation risk (correct clinical term for early-stopped trials)
     if discontinuation:
         worst = max(discontinuation, key=lambda a: a["rate"])
-        if worst["rate"] >= 5:
+        if worst["rate"] >= 5 and worst["total"] >= 10:  # tiny denominators are noise
             insights.append({
                 "kind": "risk", "title": "Trial discontinuation risk",
                 "detail": f"{worst['phase']} has the highest early-discontinuation rate at {worst['rate']}% "
@@ -229,9 +190,7 @@ async def get_research(
                           f"a reference point for sizing your own study.",
             })
 
-    total = result["totalCount"]
     return {
-        "coverage": {"analyzed": n, "total": total, "isComplete": n >= total},
         "insights": insights,
         "readoutForecast": {
             "byYear": readout_forecast,
@@ -239,6 +198,7 @@ async def get_research(
             "phaseLabels": {p: _PHASE_LABEL.get(p, p) for p in readout_phases},
             "upcomingTotal": upcoming_total,
             "upcomingPhase3": upcoming_phase3,
+            "windowEnd": horizon_end.isoformat(),
         },
         "timeToCompletion": time_to_completion,
         "discontinuation": discontinuation,
@@ -246,3 +206,9 @@ async def get_research(
         "enrollmentRate": enrollment_rate,
         "countryActivity": country_activity,
     }
+
+
+@router.get("/")
+async def get_research(f: Filters = Depends(common_filters)):
+    # Key the memo on today's date so "next 24 months" rolls forward past midnight.
+    return await analyse(f, "research", _compute, (datetime.date.today().isoformat(),))

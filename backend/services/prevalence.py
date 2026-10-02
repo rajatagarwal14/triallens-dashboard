@@ -9,16 +9,6 @@ import re
 from typing import Optional, Dict
 from services import epidemiology
 
-# Generic disease-type tokens that are NOT distinctive on their own. Matching on
-# these alone caused "Pancreatic Cancer" to silently return "breast cancer" data
-# (both share the word "cancer"). Fuzzy matching must require a distinctive word.
-_GENERIC_TOKENS = {
-    "cancer", "carcinoma", "tumor", "tumour", "neoplasm", "disease", "syndrome",
-    "disorder", "acute", "chronic", "malignant", "advanced", "metastatic",
-    "recurrent", "refractory", "stage", "type", "cell", "large", "diffuse",
-    "myeloid", "lymphoid", "solid", "primary", "secondary", "oncology",
-}
-
 # indication key → country → prevalent patients (approx)
 _DATA: Dict[str, Dict[str, int]] = {
     "breast cancer": {
@@ -28,7 +18,7 @@ _DATA: Dict[str, Dict[str, int]] = {
         "Japan": 400_000, "India": 200_000, "Canada": 180_000,
         "Netherlands": 80_000, "Belgium": 70_000, "South Korea": 120_000,
         "Taiwan": 55_000, "Poland": 90_000, "Sweden": 70_000,
-        "Switzerland": 45_000, "Turkey": 65_000,
+        "Switzerland": 45_000, "Turkey (Türkiye)": 65_000,
     },
     "aml": {
         "United States": 22_000, "China": 80_000, "Germany": 3_800,
@@ -36,7 +26,7 @@ _DATA: Dict[str, Dict[str, int]] = {
         "Japan": 8_000, "India": 15_000, "Brazil": 4_000,
         "Australia": 1_200, "Canada": 1_500, "Spain": 2_000,
         "South Korea": 2_800, "Taiwan": 1_400, "Netherlands": 900,
-        "Belgium": 800, "Poland": 1_800, "Turkey": 2_200,
+        "Belgium": 800, "Poland": 1_800, "Turkey (Türkiye)": 2_200,
     },
     "acute myeloid leukemia": {
         "United States": 22_000, "China": 80_000, "Germany": 3_800,
@@ -49,14 +39,14 @@ _DATA: Dict[str, Dict[str, int]] = {
         "France": 32_000, "United Kingdom": 42_000, "Italy": 28_000,
         "Japan": 120_000, "India": 65_000, "Brazil": 28_000,
         "Australia": 12_000, "Canada": 18_000, "Spain": 22_000,
-        "South Korea": 35_000, "Taiwan": 18_000, "Turkey": 15_000,
+        "South Korea": 35_000, "Taiwan": 18_000, "Turkey (Türkiye)": 15_000,
     },
     "lung cancer": {
         "United States": 235_000, "China": 870_000, "Germany": 57_000,
         "France": 46_000, "United Kingdom": 48_000, "Italy": 40_000,
         "Japan": 125_000, "India": 72_000, "Brazil": 32_000,
         "Australia": 14_000, "Canada": 22_000, "Spain": 28_000,
-        "South Korea": 42_000, "Poland": 22_000, "Turkey": 20_000,
+        "South Korea": 42_000, "Poland": 22_000, "Turkey (Türkiye)": 20_000,
     },
     "multiple myeloma": {
         "United States": 160_000, "Germany": 18_000, "France": 16_000,
@@ -78,7 +68,7 @@ _DATA: Dict[str, Dict[str, int]] = {
         "United Kingdom": 4_900_000, "Brazil": 16_000_000,
         "Japan": 10_000_000, "Australia": 1_300_000, "Canada": 3_000_000,
         "Italy": 3_500_000, "Spain": 3_700_000, "Mexico": 15_000_000,
-        "South Korea": 3_200_000, "Turkey": 8_000_000,
+        "South Korea": 3_200_000, "Turkey (Türkiye)": 8_000_000,
     },
     "alzheimer": {
         "United States": 6_700_000, "China": 9_830_000, "Germany": 1_700_000,
@@ -127,15 +117,88 @@ _SOURCES = {
 
 
 def _normalize(indication: str) -> str:
-    # Strip punctuation (e.g. "Alzheimer's Disease" → "alzheimers disease") so
-    # apostrophes/commas don't block an otherwise-valid match.
-    cleaned = re.sub(r"[^a-z0-9\s]", " ", indication.lower())
+    # Drop apostrophes ("Alzheimer's" -> "alzheimers"), then turn any other
+    # punctuation into spaces so commas/hyphens don't block an otherwise-valid match.
+    cleaned = re.sub(r"['\u2019`]", "", (indication or "").lower())
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _distinctive(phrase: str) -> set:
-    """Words in a phrase that actually identify the disease (drop generic tokens)."""
-    return {w for w in phrase.split() if len(w) > 3 and w not in _GENERIC_TOKENS}
+# ── Disease identity ────────────────────────────────────────────────────────
+# A curated figure is served ONLY when the query names that disease. Sharing a word
+# ("diabetes", "leukemia", "breast") is NOT identity — that mapped Type 1 Diabetes to
+# Type 2 figures, ALL to AML, and breast fibroadenoma to breast cancer.
+#
+# For every curated key:
+#   _ALIASES        other spellings of the SAME disease (exact or phrase match)
+#   _EXACT_ONLY     aliases that are only valid when they are the WHOLE query: bare
+#                   "diabetes" is the all-diabetes figure, but "type 1 diabetes"
+#                   contains that word and must not inherit it
+#   _EXCLUDED_WITH  words that make a phrase match a DIFFERENT disease than the one
+#                   measured (uveal melanoma is not cutaneous melanoma)
+_ALIASES: Dict[str, list] = {
+    "breast cancer": ["breast carcinoma", "breast neoplasm", "breast neoplasms",
+                      "carcinoma of the breast", "mammary carcinoma", "mammary cancer",
+                      "triple negative breast cancer", "tnbc"],
+    "aml": ["acute myeloid leukemia", "acute myeloid leukaemia", "acute myelogenous leukemia",
+            "acute myelogenous leukaemia", "acute non lymphocytic leukemia"],
+    "acute myeloid leukemia": ["aml", "acute myeloid leukaemia", "acute myelogenous leukemia"],
+    "nsclc": ["non small cell lung cancer", "non small cell lung carcinoma",
+              "non small cell carcinoma of the lung", "nonsmall cell lung cancer"],
+    "lung cancer": ["lung carcinoma", "lung neoplasm", "lung neoplasms", "carcinoma of the lung",
+                    "small cell lung cancer", "sclc"],
+    "multiple myeloma": ["myeloma", "plasma cell myeloma", "kahler disease"],
+    "melanoma": ["malignant melanoma", "cutaneous melanoma", "skin melanoma"],
+    "type 2 diabetes": ["type ii diabetes", "type 2 diabetes mellitus", "type ii diabetes mellitus",
+                        "diabetes mellitus type 2", "diabetes mellitus type ii", "t2dm", "t2d",
+                        "non insulin dependent diabetes", "adult onset diabetes",
+                        # The curated figures (IDF Atlas) are ALL-diabetes totals, so the
+                        # un-typed terms resolve here — but only as the whole query.
+                        "diabetes", "diabetes mellitus"],
+    "alzheimer": ["alzheimers", "alzheimers disease", "alzheimer disease", "alzheimer s disease"],
+    "dlbcl": ["diffuse large b cell lymphoma", "diffuse large b cell non hodgkin lymphoma",
+              "diffuse large cell lymphoma"],
+    "diffuse large b-cell lymphoma": ["dlbcl", "diffuse large b cell lymphoma"],
+    "ovarian cancer": ["ovarian carcinoma", "ovarian neoplasm", "ovarian neoplasms",
+                       "epithelial ovarian cancer", "carcinoma of the ovary"],
+    "prostate cancer": ["prostate carcinoma", "prostatic neoplasm", "prostatic neoplasms",
+                        "prostate adenocarcinoma", "carcinoma of the prostate"],
+    "colorectal cancer": ["colorectal carcinoma", "colorectal neoplasm", "colorectal neoplasms",
+                          "colon cancer", "rectal cancer", "colon carcinoma", "crc",
+                          "bowel cancer", "colorectal adenocarcinoma"],
+}
+_EXACT_ONLY = {"diabetes", "diabetes mellitus"}
+_EXCLUDED_WITH: Dict[str, set] = {
+    "melanoma": {"uveal", "ocular", "choroidal", "conjunctival", "mucosal", "intraocular"},
+}
+
+
+def _contains_phrase(query: str, phrase: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", query) is not None
+
+
+def _match_indication(q: str) -> Optional[tuple]:
+    """(curated_key, match_type) for a normalized query, or None.
+
+    match_type is "exact" (the query IS that disease) or "parent" (the query is a
+    narrower population inside it, e.g. "metastatic breast cancer"). The longest
+    matching phrase wins, so "non small cell lung cancer" prefers NSCLC over
+    "lung cancer"."""
+    best = None  # (rank, length, key, match_type)
+    for key in _DATA:
+        bad = _EXCLUDED_WITH.get(key, ())
+        if any(_contains_phrase(q, w) for w in bad):
+            continue
+        for alias in {_normalize(key), *(_normalize(a) for a in _ALIASES.get(key, []))}:
+            if q == alias:
+                cand = (3, len(alias), key, "exact")
+            elif alias not in _EXACT_ONLY and _contains_phrase(q, alias):
+                cand = (2, len(alias), key, "parent")
+            else:
+                continue
+            if best is None or cand[:2] > best[:2]:
+                best = cand
+    return (best[2], best[3]) if best else None
 
 
 # Umbrella searches (e.g. "Cancer") have no distinctive word, so they can't match a
@@ -146,9 +209,16 @@ _CANCER_MEMBERS = [
     "breast cancer", "lung cancer", "prostate cancer", "colorectal cancer",
     "ovarian cancer", "melanoma", "multiple myeloma", "aml", "dlbcl",
 ]
-_UMBRELLA: Dict[str, list] = {
-    "cancer": _CANCER_MEMBERS, "oncology": _CANCER_MEMBERS, "tumor": _CANCER_MEMBERS,
-    "tumour": _CANCER_MEMBERS, "carcinoma": _CANCER_MEMBERS, "neoplasm": _CANCER_MEMBERS,
+# Umbrella words, and the generic modifiers that may accompany them without changing
+# which family is meant ("Advanced Solid Tumors" is still the cancer family; "Breast
+# Cancer" is not — "breast" is not a modifier, so it never reaches this path).
+_UMBRELLA_WORDS = {
+    "cancer", "cancers", "oncology", "tumor", "tumors", "tumour", "tumours",
+    "carcinoma", "carcinomas", "neoplasm", "neoplasms", "malignancy", "malignancies",
+}
+_UMBRELLA_MODIFIERS = {
+    "advanced", "metastatic", "solid", "malignant", "recurrent", "refractory", "relapsed",
+    "unresectable", "locally", "stage", "iii", "iv", "all", "any", "of", "and", "or", "the",
 }
 
 
@@ -172,43 +242,43 @@ def _source_for(key: str) -> str:
 
 def lookup(indication: str) -> Optional[Dict[str, dict]]:
     """
-    Returns country → {prevalence, source, confidence} for a given indication.
-    Returns None if indication not confidently matched in the pre-fed table.
+    country → {prevalence, source, confidence, note, method, matchType, matchedIndication}.
+
+    1. Curated figures — only when the query IS (or sits inside) a curated disease
+       (see _match_indication). confidence="high".
+    2. Umbrella family totals for "Cancer"/"Solid tumors"/"Oncology".
+    3. Deterministic epidemiology model (confidence "modeled"), or — when no
+       disease-specific model exists — an explicitly labelled placeholder.
     """
-    key = _normalize(indication)
+    q = _normalize(indication)
     note = "5-yr prevalence estimate"
     data = None
+    match_type = "exact"
+    matched = q
 
-    # 1) exact curated match
-    if key in _DATA:
-        data = _DATA[key]
+    hit = _match_indication(q)
+    if hit:
+        matched, match_type = hit
+        data = _DATA[matched]
+        if match_type == "parent":
+            note = (f"Matched the broader indication '{matched}'. Your search may describe a "
+                    f"narrower population (subtype, stage or biomarker) — treat as an upper bound.")
     else:
-        query_words = _distinctive(key)
-        if not query_words:
-            # No distinctive word → try an umbrella-family aggregate (e.g. "Cancer").
-            member_key = next((tok for tok in key.split() if tok in _UMBRELLA), None)
-            if member_key:
-                members = [m for m in _UMBRELLA[member_key] if m in _DATA]
-                agg = _aggregate(members)
-                if agg:
-                    data = agg
-                    note = f"Aggregate of {len(members)} indications — approximate family total"
-        else:
-            # fuzzy: require a shared *distinctive* word so generic overlap (e.g. both
-            # containing "cancer") can never silently serve the wrong indication's data.
-            matched = next(
-                (k for k in _DATA if _distinctive(_normalize(k)) & query_words),
-                None
-            )
-            if matched:
-                data = _DATA[matched]
+        core = [t for t in q.split() if t not in _UMBRELLA_MODIFIERS]
+        if core and all(t in _UMBRELLA_WORDS for t in core):
+            members = [m for m in _CANCER_MEMBERS if m in _DATA]
+            agg = _aggregate(members)
+            if agg:
+                data = agg
+                matched = "cancer (family aggregate)"
+                match_type = "family"
+                note = f"Aggregate of {len(members)} indications — approximate family total"
 
-    # 2) No curated figure → fall back to the deterministic epidemiology model so
-    #    prevalence works for ANY indication with no external AI/LLM.
+    # 3) No curated figure → deterministic epidemiology model (no AI/LLM).
     if data is None:
         return epidemiology.estimate(indication)
 
-    source = _source_for(key)
+    source = _source_for(matched)
     return {
         country: {
             "prevalence": count,
@@ -216,9 +286,22 @@ def lookup(indication: str) -> Optional[Dict[str, dict]]:
             "confidence": "high",
             "note": note,
             "method": "curated",
+            "matchType": match_type,
+            "matchedIndication": matched,
         }
         for country, count in data.items()
     }
+
+
+def is_placeholder(data: Optional[Dict[str, dict]]) -> bool:
+    """True when every entry is the generic catch-all rate (no disease-specific model).
+    Such numbers must not feed maps, competition intensity or planning metrics."""
+    return bool(data) and all(v.get("confidence") == "placeholder" for v in data.values())
+
+
+def usable(data: Optional[Dict[str, dict]]) -> Optional[Dict[str, dict]]:
+    """`data` if it is a real (curated or disease-specific modelled) estimate, else None."""
+    return None if (not data or is_placeholder(data)) else data
 
 
 def list_supported() -> list:
