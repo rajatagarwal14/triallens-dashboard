@@ -42,10 +42,22 @@ export interface SearchResult {
   nextPageToken?: string
 }
 
+export type RetrievalState = 'new' | 'retrieving' | 'complete' | 'capped' | 'paused' | 'error' | 'none'
+
+/** How much of the registry result set the numbers on the page are computed from. */
 export interface Coverage {
   analyzed: number
   total: number
   isComplete: boolean
+  state?: RetrievalState
+  retrieved?: number
+  capped?: boolean
+  refreshing?: boolean
+  retrievedAt?: string | null
+  completedAt?: string | null
+  error?: string | null
+  note?: string | null
+  pages?: number
 }
 
 export interface LandscapeData {
@@ -60,7 +72,9 @@ export interface LandscapeData {
   enrollmentByYear: Record<string, number>
   yearByPhase: Record<string, Record<string, number>>
   yearBySponsor: Record<string, Record<string, number>>
-  avgEnrollment: number
+  medianEnrollment: number
+  enrollmentN?: number
+  phaseLabels?: Record<string, string>
 }
 
 export interface GeoCountry {
@@ -269,4 +283,27 @@ export interface SearchFilters {
   sort?: string
   pageSize: number
   pageToken?: string
+}
+
+export interface PrevalenceEntry {
+  prevalence: number
+  source: string
+  confidence: string
+  note: string
+  method?: string
+  matchType?: 'exact' | 'parent'
+}
+
+export interface PrevalenceResponse {
+  condition: string
+  found: boolean
+  placeholder?: boolean
+  method?: 'curated' | 'modeled' | 'none'
+  modeled?: boolean
+  confidence?: string
+  matchType?: 'exact' | 'parent' | 'none'
+  matchedIndication?: string | null
+  warning?: string | null
+  countries: Record<string, PrevalenceEntry>
+  note: string
 }

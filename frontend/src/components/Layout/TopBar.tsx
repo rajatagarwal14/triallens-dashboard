@@ -18,7 +18,7 @@ function AlertBell() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  const { data } = useQuery({
+  const { data, isError, refetch } = useQuery({
     queryKey: ['alerts', filters.condition, filterParams(filters)],
     queryFn: () => api.getAlerts({ ...filterParams(filters), days: WINDOW_DAYS }),
     enabled: filters.condition.trim().length >= 2,
@@ -79,7 +79,12 @@ function AlertBell() {
             </div>
 
             <div className="max-h-[360px] overflow-y-auto">
-              {!data ? (
+              {isError ? (
+                <div className="px-4 py-6 text-center">
+                  <p className="text-[11px] text-red-600 mb-2">Couldn't load new-trial alerts.</p>
+                  <button onClick={() => refetch()} className="btn-ghost text-[11px] py-1 px-2">Retry</button>
+                </div>
+              ) : !data ? (
                 <div className="p-4 space-y-2">
                   {Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 bg-iq-bg rounded animate-pulse" />)}
                 </div>

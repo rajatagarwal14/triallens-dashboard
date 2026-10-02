@@ -10,6 +10,7 @@ import {
 import { TopBar } from '@/components/Layout/TopBar'
 import { CoverageBadge } from '@/components/common/CoverageBadge'
 import { ErrorState } from '@/components/common/ErrorState'
+import { useAnalytics } from '@/hooks/useAnalytics'
 import { api } from '@/api/client'
 import { useSharedSearch, filterParams } from '@/context/SearchContext'
 import { ActiveFilters } from '@/components/common/ActiveFilters'
@@ -21,8 +22,42 @@ import 'leaflet/dist/leaflet.css'
 // GeoJSON below draws India's de-facto borders (Kashmir truncated), so we strip
 // its India feature and draw this one on top instead.
 import INDIA_OFFICIAL from '@/data/india-official.json'
+// World country outlines are bundled (see README → Data provenance) instead of fetched
+// from raw.githubusercontent.com at runtime, so the map works behind corporate filters.
+import WORLD_GEOJSON from '@/data/world.json'
 
-const WORLD_GEOJSON_URL = 'https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson'
+// Basemap tiles are OPTIONAL. The choropleth polygons are opaque, so the map is fully
+// usable without any tile service. Provide one of these at build/dev time to add a basemap:
+//   VITE_MAP_TILE_URL     any raster tile template, e.g. your company's internal tile server
+//   VITE_CARTO_API_KEY    a CARTO basemap key (CARTO serves a watermark without one)
+const TILE_URL: string | null = (() => {
+  const custom = import.meta.env.VITE_MAP_TILE_URL as string | undefined
+  if (custom) return custom
+  const key = import.meta.env.VITE_CARTO_API_KEY as string | undefined
+  return key
+    ? `https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(key)}`
+    : null
+})()
+const TILE_ATTRIBUTION = (import.meta.env.VITE_MAP_TILE_ATTRIBUTION as string | undefined)
+  ?? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+// Up to `limit` site dots, taken round-robin across countries so one or two busy
+// countries can't use up the whole budget and leave the rest of the map empty.
+function interleaveSites(lists: Site[][], limit: number): Site[] {
+  const out: Site[] = []
+  for (let i = 0; out.length < limit; i++) {
+    let any = false
+    for (const l of lists) {
+      if (i < l.length) { out.push(l[i]); any = true; if (out.length >= limit) break }
+    }
+    if (!any) break
+  }
+  return out
+}
+const MAX_SITE_DOTS = 400
 
 /**
  * CT.gov country names → this GeoJSON's properties.name. Without this, the
@@ -113,8 +148,10 @@ function fmtNum(n: number): string {
   return String(Math.round(n))
 }
 
+// Exact match: "NOT_YET_RECRUITING" and "ACTIVE_NOT_RECRUITING" both contain "RECRUIT".
 function siteIsRecruiting(status?: string): boolean {
-  return (status ?? '').toUpperCase().includes('RECRUIT')
+  const s = (status ?? '').toUpperCase()
+  return s === 'RECRUITING' || s === 'ENROLLING_BY_INVITATION'
 }
 
 // Fly the map to fit a selected country's sites when the selection changes.
@@ -186,19 +223,8 @@ function GeoLayer({ valueByGeo, colorFor, unit, mode, selectedGeo }: {
   valueByGeo: Record<string, number>; colorFor: (v: number) => string
   unit: string; mode: MapMode; selectedGeo: string | null
 }) {
-  const [geoJson, setGeoJson] = useState<GeoJSON.FeatureCollection | null>(null)
-  const [loadFailed, setLoadFailed] = useState(false)
+  const geoJson = WORLD_GEOJSON as unknown as GeoJSON.FeatureCollection
   const layerRef = useRef<any>(null)
-
-  useEffect(() => {
-    fetch(WORLD_GEOJSON_URL)
-      .then(r => r.json())
-      .then(setGeoJson)
-      .catch(() => setLoadFailed(true))
-  }, [])
-
-  if (loadFailed) return null
-  if (!geoJson) return null
 
   const styleFeature = (feature: any) => {
     const name = feature?.properties?.name ?? ''
@@ -218,8 +244,8 @@ function GeoLayer({ valueByGeo, colorFor, unit, mode, selectedGeo }: {
       ? `${value.toLocaleString()} ${unit}`
       : (mode === 'prevalence' ? 'no prevalence data' : mode === 'intensity' ? 'no competition data' : '0 trials')
     layer.bindTooltip(
-      `<div class="font-semibold text-xs">${name}</div>
-       <div class="text-[10px] text-iq-muted mt-0.5">${label}</div>`,
+      `<div class="font-semibold text-xs">${escapeHtml(String(name))}</div>
+       <div class="text-[10px] text-iq-muted mt-0.5">${escapeHtml(label)}</div>`,
       { sticky: true, className: 'leaflet-tooltip-iq' }
     )
   }
@@ -273,9 +299,10 @@ export function GeoPage() {
   const [radiusMode, setRadiusMode] = useState(false)
   const [radiusCenter, setRadiusCenter] = useState<[number, number] | null>(null)
   const [radiusMiles, setRadiusMiles] = useState(100)
+  const [tilesFailed, setTilesFailed] = useState(false)
 
   // Prevalence is needed for the White-Space panel, prevalence AND intensity modes.
-  const { data: prevData } = useQuery({
+  const { data: prevData, isError: prevError, error: prevErr, refetch: prevRefetch } = useQuery({
     queryKey: ['prevalence', condition],
     queryFn: () => api.getPrevalence(condition),
     enabled: whiteSpaceMode || mapMode === 'prevalence' || mapMode === 'intensity',
@@ -285,10 +312,7 @@ export function GeoPage() {
     ? { geoLat: radiusCenter[0], geoLng: radiusCenter[1], geoMiles: radiusMiles }
     : {}
   const geoQuery = { ...geoParams, ...radiusParams }
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['geo', geoQuery],
-    queryFn: () => api.getGeo(geoQuery),
-  })
+  const { data, isLoading, isError, error, refetch } = useAnalytics(['geo', geoQuery], () => api.getGeo(geoQuery))
 
   const countries = data?.countries ?? []
 
@@ -330,7 +354,9 @@ export function GeoPage() {
 
   const selected = selectedCountry ? countries.find(c => c.country === selectedCountry) ?? null : null
   // Dots: all sites normally, or just the selected country's when drilled in.
-  const shownSites = (selected ? selected.sites : countries.flatMap(c => c.sites)).slice(0, 300)
+  const allSiteLists = selected ? [selected.sites] : countries.map(c => c.sites)
+  const totalDots = allSiteLists.reduce((n, l) => n + l.length, 0)
+  const shownSites = interleaveSites(allSiteLists, MAX_SITE_DOTS)
   const selectedGeo = selected ? toGeoName(selected.country) : null
 
   // Clear map drill-down state when the indication changes so a pinned site or
@@ -437,11 +463,49 @@ export function GeoPage() {
         {/* Coverage disclosure */}
         {!isLoading && !isError && data && (
           <div className="flex-shrink-0 flex items-center gap-2">
-            <CoverageBadge coverage={data.coverage} />
-            {(mapMode === 'prevalence' || mapMode === 'intensity') && prevData?.modeled && (
+            <CoverageBadge coverage={data.coverage} params={geoQuery} />
+            {(mapMode === 'prevalence' || mapMode === 'intensity') && prevData?.found && prevData?.modeled && (
               <span className="text-[10px] text-iq-muted flex items-center gap-1">
                 <Cpu className="w-2.5 h-2.5 text-iq-blue" /> Modeled prevalence (epidemiology engine) — no AI key needed
               </span>
+            )}
+          </div>
+        )}
+
+
+        {/* Honest status for the map's supporting data */}
+        {!isLoading && !isError && data && (
+          <div className="flex-shrink-0 flex flex-col gap-1.5">
+            {(mapMode === 'prevalence' || mapMode === 'intensity' || whiteSpaceMode) && prevError && (
+              <ErrorState compact error={prevErr} onRetry={() => prevRefetch()} />
+            )}
+            {(mapMode === 'prevalence' || mapMode === 'intensity' || whiteSpaceMode) && prevData && !prevData.found && (
+              <p className="text-[11px] text-iq-orange bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                No disease-specific prevalence estimate exists for “{condition}”, so prevalence and competition-intensity
+                layers are empty rather than showing an invented number. You can enter your own figures in the White-Space panel.
+              </p>
+            )}
+            {(mapMode === 'prevalence' || mapMode === 'intensity' || whiteSpaceMode) && prevData?.found && prevData.warning && (
+              <p className="text-[11px] text-iq-muted bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                {prevData.warning}
+              </p>
+            )}
+            {!TILE_URL && view === 'map' && (
+              <p className="text-[10px] text-iq-muted">
+                Basemap tiles are off (no tile key configured) — country shading and site dots are unaffected.
+                To add one, set VITE_CARTO_API_KEY or VITE_MAP_TILE_URL in frontend/.env.local (see README).
+              </p>
+            )}
+            {tilesFailed && TILE_URL && (
+              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                Basemap tiles could not be loaded (blocked network or invalid key). Shading and dots still work.
+              </p>
+            )}
+            {view === 'map' && totalDots > 0 && (
+              <p className="text-[10px] text-iq-muted">
+                Showing {shownSites.length.toLocaleString()} of {totalDots.toLocaleString()} geocoded site locations
+                (up to 50 per country, spread across countries).
+              </p>
             )}
           </div>
         )}
@@ -456,7 +520,7 @@ export function GeoPage() {
               every trial competing in a country, per 100,000 people who have this condition there.
               <span className="text-red-700 font-medium"> Darker = more competition</span> (many trials chasing the same
               patients — harder and slower to enrol); lighter = an open field.
-              {!prevData?.found && <span className="text-iq-orange"> No prevalence data for this indication yet, so the map is empty — try a more common condition.</span>}
+              
             </p>
           </div>
         )}
@@ -546,12 +610,14 @@ export function GeoPage() {
                 style={{ height: '100%', width: '100%', background: '#E8EEF3' }}
                 zoomControl={false}
               >
-                <TileLayer
-                  url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                  subdomains="abcd"
-                  maxZoom={20}
-                />
+                {TILE_URL && (
+                  <TileLayer
+                    url={TILE_URL}
+                    attribution={TILE_ATTRIBUTION}
+                    maxZoom={20}
+                    eventHandlers={{ tileerror: () => setTilesFailed(true) }}
+                  />
+                )}
                 {!isLoading && <GeoLayer valueByGeo={activeByGeo} colorFor={colorFor} unit={MODE_META[mapMode].unit} mode={mapMode} selectedGeo={selectedGeo} />}
                 <RadiusPicker center={radiusCenter} miles={radiusMiles} active={radiusMode} onSet={setRadiusCenter} />
                 {selected && <FlyToSites sites={selected.sites} />}

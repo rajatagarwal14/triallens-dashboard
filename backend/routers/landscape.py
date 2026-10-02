@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
-from services import ct_gov, prevalence as prev_svc
+from services import ct_gov, prevalence as prev_svc, analytics as an, status as st
+from services.datasets import Filters, manager
+from routers._common import common_filters, analyse
 from collections import defaultdict
 
 router = APIRouter()
@@ -10,148 +12,123 @@ def _csv(v: Optional[str]) -> Optional[list]:
     return v.split(",") if v else None
 
 
-@router.get("/")
-async def get_landscape(
-    condition: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    phases: Optional[str] = Query(None),
-    studyTypes: Optional[str] = Query(None),
-    sponsorClasses: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    fromYear: Optional[int] = Query(None, ge=2000, le=2030),
-):
-    result = await ct_gov.search_studies(
-        condition=condition, status=_csv(status), phases=_csv(phases),
-        study_types=_csv(studyTypes), sponsor_classes=_csv(sponsorClasses),
-        country=country, from_year=fromYear, page_size=1000,
-    )
-    studies = result["studies"]
-
-    phase_counts: dict[str, int] = defaultdict(int)
-    status_counts: dict[str, int] = defaultdict(int)
-    sponsor_class_counts: dict[str, int] = defaultdict(int)
-    country_counts: dict[str, int] = defaultdict(int)
-    year_counts: dict[str, int] = defaultdict(int)
-    # For the enrollment-velocity overlay: sum + count of enrollment per start-year,
-    # so the frontend can plot avg trial size alongside trial volume.
-    year_enroll_sum: dict[str, int] = defaultdict(int)
-    year_enroll_n: dict[str, int] = defaultdict(int)
-    # Velocity segmentation (G): trial starts per year, split by phase / sponsor class.
-    year_by_phase: dict[str, dict] = defaultdict(lambda: defaultdict(int))
-    year_by_sponsor: dict[str, dict] = defaultdict(lambda: defaultdict(int))
-    total_enrollment = 0
-    enrollment_count = 0
+def _landscape(studies: list) -> dict:
+    phase_counts: dict = defaultdict(int)
+    status_counts: dict = defaultdict(int)
+    sponsor_class_counts: dict = defaultdict(int)
+    country_counts: dict = defaultdict(int)
+    year_counts: dict = defaultdict(int)
+    year_enroll: dict = defaultdict(list)
+    year_by_phase: dict = defaultdict(lambda: defaultdict(int))
+    year_by_sponsor: dict = defaultdict(lambda: defaultdict(int))
+    sizes: list = []
 
     for s in studies:
-        for phase in s.get("phases", ["N/A"]):
-            phase_counts[phase] += 1
-        status_counts[s.get("status", "Unknown")] += 1
-        sp_class = s.get("sponsor", {}).get("class", "Unknown")
+        pk = an.phase_key(s)                      # one trial → one phase bucket
+        phase_counts[pk] += 1
+        status_counts[s.get("status") or "Unknown"] += 1
+        sp_class = (s.get("sponsor") or {}).get("class") or "Unknown"
         sponsor_class_counts[sp_class] += 1
-        # Count TRIALS per country (one per trial), not sites — matches /geo and the
-        # "Top Countries by Trial Activity" label.
-        for c_name in s.get("countries", {}):
+        for c_name in (s.get("countries") or {}):  # trials per country, not sites
             country_counts[c_name] += 1
+        count = (s.get("enrollment") or {}).get("count")
         start = s.get("startDate")
-        enroll = s.get("enrollment", {})
-        if start:
+        if start and start[:4].isdigit():
             year = start[:4]
             year_counts[year] += 1
-            year_by_phase[year][(s.get("phases") or ["NA"])[0]] += 1
+            year_by_phase[year][pk] += 1
             year_by_sponsor[year][sp_class] += 1
-            if enroll and enroll.get("count"):
-                year_enroll_sum[year] += enroll["count"]
-                year_enroll_n[year] += 1
-        if enroll and enroll.get("count"):
-            total_enrollment += enroll["count"]
-            enrollment_count += 1
+            if count:
+                year_enroll[year].append(count)
+        if count:
+            sizes.append(count)
 
-    enrollment_by_year = {
-        y: round(year_enroll_sum[y] / year_enroll_n[y])
-        for y in year_enroll_sum if year_enroll_n[y]
-    }
-
-    total = result["totalCount"]
-    analyzed = len(studies)
     return {
-        "totalCount": total,
-        "sampleSize": analyzed,
-        "coverage": {
-            "analyzed": analyzed,
-            "total": total,
-            "isComplete": analyzed >= total,
-        },
         "phaseCounts": dict(phase_counts),
+        "phaseLabels": {k: an.PHASE_LABEL.get(k, k) for k in phase_counts},
         "statusCounts": dict(status_counts),
         "sponsorClassCounts": dict(sponsor_class_counts),
         "countryCounts": dict(sorted(country_counts.items(), key=lambda x: -x[1])[:30]),
         "yearCounts": dict(sorted(year_counts.items())),
-        "enrollmentByYear": dict(sorted(enrollment_by_year.items())),
+        # Median trial size per start year (means are dominated by a few huge trials).
+        "enrollmentByYear": {y: round(an.median(v)) for y, v in sorted(year_enroll.items())},
         "yearByPhase": {y: dict(v) for y, v in sorted(year_by_phase.items())},
         "yearBySponsor": {y: dict(v) for y, v in sorted(year_by_sponsor.items())},
-        "avgEnrollment": round(total_enrollment / enrollment_count) if enrollment_count else 0,
+        "medianEnrollment": round(an.median(sizes)) if sizes else 0,
+        "enrollmentN": len(sizes),
+    }
+
+
+@router.get("/")
+async def get_landscape(f: Filters = Depends(common_filters)):
+    snap = await manager.snapshot(f)
+    payload = await manager.compute(snap, "landscape", (), _landscape)
+    return {**payload, "totalCount": snap.total, "sampleSize": len(snap.studies),
+            "coverage": snap.coverage}
+
+
+GEO_SITES_PER_COUNTRY = 50
+
+
+def _geo(studies: list, condition: Optional[str]) -> dict:
+    country_data: dict = defaultdict(
+        lambda: {"trialCount": 0, "siteCount": 0, "competingEnrollment": 0,
+                 "sites": [], "_seen": set()})
+    for s in studies:
+        enroll = (s.get("enrollment") or {}).get("count") or 0
+        # Only trials that are enrolling or about to are *current* demand for patients;
+        # finished trials no longer compete for anyone.
+        competing = st.norm(s.get("status")) in st.COMPETING
+        for country, count in (s.get("countries") or {}).items():
+            cd = country_data[country]
+            cd["trialCount"] += 1
+            cd["siteCount"] += count
+            if competing:
+                cd["competingEnrollment"] += enroll
+        for site in s.get("sites") or []:
+            cd = country_data[site.get("country") or "Unknown"]
+            if len(cd["sites"]) >= GEO_SITES_PER_COUNTRY:
+                continue
+            key = (site.get("facility"), site.get("lat"), site.get("lon"))
+            if key in cd["_seen"]:
+                continue
+            cd["_seen"].add(key)
+            cd["sites"].append(site)
+
+    prev = prev_svc.usable(prev_svc.lookup(condition)) if condition else None
+    for cname, cdata in country_data.items():
+        cdata.pop("_seen", None)
+        pool = (prev or {}).get(cname, {}).get("prevalence") if prev else None
+        cdata["prevalence"] = pool
+        cdata["competitionIntensity"] = (
+            round(cdata["competingEnrollment"] / pool * 100_000, 1) if pool else None)
+
+    return {
+        "hasPrevalence": prev is not None,
+        "competitionNote": ("Competing enrollment sums the target size of trials that are recruiting, "
+                            "enrolling by invitation or not yet recruiting, counting each trial's full "
+                            "target in every country it runs. It is a demand-pressure proxy, not an "
+                            "allocated per-country share."),
+        "sitesPerCountryCap": GEO_SITES_PER_COUNTRY,
+        "countries": [{"country": k, **v}
+                      for k, v in sorted(country_data.items(), key=lambda x: -x[1]["trialCount"])],
     }
 
 
 @router.get("/geo")
-async def get_geo(
-    condition: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    phases: Optional[str] = Query(None),
-    studyTypes: Optional[str] = Query(None),
-    sponsorClasses: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    fromYear: Optional[int] = Query(None, ge=2000, le=2030),
-    geoLat: Optional[float] = Query(None, ge=-90, le=90),
-    geoLng: Optional[float] = Query(None, ge=-180, le=180),
-    geoMiles: Optional[float] = Query(None, gt=0, le=12000),
-):
-    result = await ct_gov.search_studies(
-        condition=condition, status=_csv(status), phases=_csv(phases),
-        study_types=_csv(studyTypes), sponsor_classes=_csv(sponsorClasses),
-        country=country, from_year=fromYear,
-        geo_lat=geoLat, geo_lng=geoLng, geo_miles=geoMiles, page_size=1000,
-    )
-    studies = result["studies"]
+async def get_geo(f: Filters = Depends(common_filters)):
+    return await analyse(f, "geo", lambda studies: _geo(studies, f.condition), (f.condition,))
 
-    country_data: dict[str, dict] = defaultdict(
-        lambda: {"trialCount": 0, "siteCount": 0, "competingEnrollment": 0, "sites": []})
-    for s in studies:
-        enroll = (s.get("enrollment") or {}).get("count") or 0
-        for country, count in s.get("countries", {}).items():
-            country_data[country]["trialCount"] += 1
-            country_data[country]["siteCount"] += count
-            country_data[country]["competingEnrollment"] += enroll
-        for site in s.get("sites", [])[:10]:
-            c = site["country"]
-            if len(country_data[c]["sites"]) < 100:
-                country_data[c]["sites"].append(site)
 
-    # Competition-intensity (D): competing enrollment ÷ patient pool, per country,
-    # expressed as enrollment slots per 100k prevalent patients. Needs prevalence.
-    prev = prev_svc.lookup(condition) if condition else None
-    for cname, cdata in country_data.items():
-        pool = (prev or {}).get(cname, {}).get("prevalence") if prev else None
-        cdata["prevalence"] = pool
-        cdata["competitionIntensity"] = (
-            round(cdata["competingEnrollment"] / pool * 100_000, 1) if pool else None
-        )
-
-    total = result["totalCount"]
-    analyzed = len(studies)
-    return {
-        "coverage": {
-            "analyzed": analyzed,
-            "total": total,
-            "isComplete": analyzed >= total,
-        },
-        "hasPrevalence": prev is not None,
-        "competitionNote": "Competing enrollment counts each trial's full target in every country it runs — a demand-pressure proxy, not an allocated per-country share.",
-        "countries": [
-            {"country": k, **v, "sites": v["sites"][:50]}
-            for k, v in sorted(country_data.items(), key=lambda x: -x[1]["trialCount"])
-        ]
-    }
+def _age_years(value: Optional[str]) -> Optional[float]:
+    """"18 Years" → 18, "6 Months" → 0.5, "N/A"/missing → None."""
+    import re
+    m = re.match(r"\s*(\d+(?:\.\d+)?)\s*(year|month|week|day)", value or "", re.I)
+    if not m:
+        return None
+    n, unit = float(m.group(1)), m.group(2).lower()
+    years = n / {"year": 1, "month": 12, "week": 52, "day": 365}[unit]
+    return int(years) if years == int(years) else round(years, 2)
 
 
 @router.get("/eligibility/{nct_id}")
@@ -160,6 +137,11 @@ async def get_eligibility(nct_id: str):
     study = await ct_gov.get_study(nct_id)
     criteria = study.get("eligibility", {}).get("criteria", "")
     extracted = eligibility_nlp.extract(criteria)
+    # The registry publishes structured min/max ages ("18 Years", "N/A"); prefer them to
+    # regex-guessing from free text, which missed most protocols.
+    elig = study.get("eligibility") or {}
+    extracted["ageRange"] = {"min": _age_years(elig.get("minimumAge")),
+                             "max": _age_years(elig.get("maximumAge"))}
 
     # ── Restrictiveness vs the market ────────────────────────────────────
     # Score this protocol's complexity against peer trials in the same
@@ -205,19 +187,36 @@ async def get_eligibility(nct_id: str):
 @router.get("/prevalence")
 async def get_prevalence(condition: str = Query(...)):
     data = prev_svc.lookup(condition)
-    if not data:
-        # Should not happen — the epidemiology model always returns something —
-        # but keep a safe empty fallback.
+    if not data or prev_svc.is_placeholder(data):
+        # No disease-specific figures. We deliberately return NO numbers rather than a
+        # generic catch-all rate: an invented ~250/100k looks like a measurement and
+        # silently drives the prevalence map, competition intensity and white-space.
         return {"condition": condition, "found": False, "countries": {},
-                "method": "none", "note": "No estimate available.", "modeled": False}
+                "method": "none", "modeled": False, "placeholder": True,
+                "confidence": "none", "matchType": "none",
+                "note": ("No disease-specific prevalence model exists for this indication, so no "
+                         "estimate is shown. Enter your own figures in the White-Space panel."),
+                "warning": "No prevalence estimate available for this indication."}
 
-    # Curated (measured figures) vs modeled (deterministic epidemiology model).
+    first = next(iter(data.values()))
     modeled = any(v.get("method") == "modeled" for v in data.values())
+    match_type = first.get("matchType", "exact")
+    warning = None
+    if match_type == "parent":
+        warning = first.get("note")
+    elif modeled:
+        warning = ("Modelled from a disease-category rate × population — directional only. "
+                   "Check against a primary source before relying on it.")
     return {
         "condition": condition,
         "found": True,
         "method": "modeled" if modeled else "curated",
         "modeled": modeled,
+        "placeholder": False,
+        "confidence": first.get("confidence", "modeled"),
+        "matchType": match_type,
+        "matchedIndication": first.get("matchedIndication") or first.get("category"),
+        "warning": warning,
         "countries": data,
         "note": ("Modeled estimate — TrialLens epidemiology engine (prevalence rate × population). "
                  "No AI/API key required; override any country."

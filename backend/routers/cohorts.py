@@ -16,28 +16,33 @@ Axes:
   • geography         — China-only vs global (incl./excl. China)  ← highlighted split
 """
 import re
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from collections import defaultdict
-from statistics import median
-from services import ct_gov, ontology
+from services import analytics as an, ontology, status as st
+from services.datasets import Filters
+from routers._common import common_filters, analyse
 
 router = APIRouter()
 
-_DEAD = {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
 _GENERIC = {
     "cancer", "carcinoma", "tumor", "tumour", "neoplasm", "disease", "syndrome",
     "disorder", "acute", "chronic", "malignant", "advanced", "metastatic",
     "recurrent", "refractory", "relapsed", "stage", "type", "cell", "solid",
     "primary", "secondary", "with", "and", "the", "trial", "study", "adult",
 }
-# biomarker / molecular-selection tokens (word-boundary matched)
+# Biomarker / molecular-selection tokens. Short gene symbols that are also ordinary words
+# ("criteria are MET", "RET", "KIT", "SMO") are only counted when written in CAPITALS in
+# the original text, so lower-case prose can never trigger them.
 _BIOMARKERS = [
-    "jak2", "calr", "mpl", "egfr", "alk", "ros1", "braf", "kras", "nras", "her2",
-    "brca", "brca1", "brca2", "pd-l1", "pdl1", "msi", "flt3", "idh1", "idh2",
-    "tp53", "met", "ret", "ntrk", "fgfr", "pik3ca", "kit", "pdgfra", "bcr-abl",
-    "cd20", "cd19", "cd30", "cd38", "her2neu", "ntrk1", "hras", "smo",
+    "jak2", "calr", "egfr", "ros1", "braf", "kras", "nras", "her2",
+    "brca", "brca1", "brca2", "pd-l1", "pdl1", "flt3", "idh1", "idh2",
+    "tp53", "ntrk", "fgfr", "pik3ca", "pdgfra", "bcr-abl",
+    "cd20", "cd19", "cd30", "cd38", "her2neu", "ntrk1", "hras",
 ]
+_AMBIGUOUS_MARKERS = ["MPL", "ALK", "MSI", "MET", "RET", "KIT", "SMO"]
+_BIOMARKER_RE = re.compile(r"\b(?:" + "|".join(re.escape(b) for b in _BIOMARKERS) + r")\b")
+_AMBIGUOUS_RE = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(_AMBIGUOUS_MARKERS) + r")(?![A-Za-z0-9])")
 _LINE_RULES = [
     ("Relapsed / refractory", r"relaps|refractor|\br/r\b|previously treated|prior (line|therap|treatment)|second[- ]line|third[- ]line|\b2l\b|\b3l\b"),
     ("First-line / naïve", r"treatment[- ]na[iï]ve|untreated|newly diagnosed|first[- ]line|front[- ]line|\b1l\b|no prior"),
@@ -48,21 +53,20 @@ def _csv(v: Optional[str]):
     return v.split(",") if v else None
 
 
-def _months_between(start: str, end: str):
-    try:
-        sy, sm = int(start[:4]), int(start[5:7]) if len(start) >= 7 else 1
-        ey, em = int(end[:4]), int(end[5:7]) if len(end) >= 7 else 1
-    except (ValueError, IndexError, TypeError):
-        return None
-    m = (ey - sy) * 12 + (em - sm)
-    return m if 0 <= m <= 240 else None
-
-
-def _study_text(s: dict) -> str:
+def _study_raw(s: dict) -> str:
     parts = [s.get("title", ""), s.get("officialTitle", ""),
              (s.get("eligibility") or {}).get("criteria", "")]
     parts += (s.get("conditions") or [])
-    return " ".join(parts).lower()
+    return " ".join(p for p in parts if p)
+
+
+def _regimen_text(s: dict) -> str:
+    """Title-level text only: "combination" in eligibility prose says nothing about the regimen."""
+    return " ".join([s.get("title") or "", s.get("officialTitle") or ""]).lower()
+
+
+_NOT_ACTIVE = re.compile(r"placebo|sham|saline|vehicle|standard of care|best supportive|"
+                         r"observation|no intervention|usual care|control", re.I)
 
 
 # ── Axis classifiers: each returns (group_key, group_label) for one study ──────
@@ -80,10 +84,8 @@ def _cls_geography(s, ctx):
 
 
 def _cls_biomarker(s, ctx):
-    text = ctx["text"][s["nctId"]]
-    for bm in _BIOMARKERS:
-        if re.search(rf"\b{re.escape(bm)}\b", text):
-            return ("biomarker", "Biomarker-selected")
+    if _BIOMARKER_RE.search(ctx["text"][s["nctId"]]) or _AMBIGUOUS_RE.search(ctx["raw"][s["nctId"]]):
+        return ("biomarker", "Biomarker-selected")
     return ("all_comers", "All-comers")
 
 
@@ -97,10 +99,12 @@ def _cls_line(s, ctx):
 
 
 def _cls_mono_combo(s, ctx):
-    drugs = [i for i in (s.get("interventions") or [])
-             if (i.get("type") or "").upper() in ("DRUG", "BIOLOGICAL")]
-    text = ctx["text"][s["nctId"]]
-    combo = len(drugs) >= 2 or re.search(r"combination|\bplus\b| in combination|co[- ]administ", text)
+    # Active agents only: a placebo / comparator arm is not a second drug.
+    drugs = {(i.get("name") or "").strip().lower() for i in (s.get("interventions") or [])
+             if (i.get("type") or "").upper() in ("DRUG", "BIOLOGICAL")
+             and (i.get("name") or "").strip() and not _NOT_ACTIVE.search(i.get("name") or "")}
+    text = _regimen_text(s)
+    combo = len(drugs) >= 2 or re.search(r"combination|\bplus\b|co[- ]administ", text)
     return ("combo", "Combination") if combo else ("mono", "Monotherapy")
 
 
@@ -155,11 +159,11 @@ def _group_metrics(members: list) -> dict:
     paces, durs, dropped = [], [], 0
     enroll_targets = []
     for s in members:
-        if s.get("status") in _DEAD:
+        if st.norm(s.get("status")) in st.DISCONTINUED:
             dropped += 1
         c = (s.get("enrollment") or {}).get("count")
         sites = s.get("siteCount") or 0
-        mo = _months_between(s.get("startDate") or "", s.get("primaryCompletionDate") or "")
+        mo = an.months_between(s.get("startDate"), s.get("primaryCompletionDate"))
         if c and c > 0:
             enroll_targets.append(c)
             if sites > 0 and mo and mo > 0:
@@ -171,22 +175,29 @@ def _group_metrics(members: list) -> dict:
     n = len(members)
     return {
         "trialCount": n,
-        "enrollPacePerSiteMonth": round(median(paces), 2) if paces else None,
+        "enrollPacePerSiteMonth": round(an.median(paces), 2) if paces else None,
         "enrollPaceN": len(paces),
-        "medianDurationMonths": round(median(durs)) if durs else None,
-        "medianEnrollment": round(median(enroll_targets)) if enroll_targets else None,
+        "medianDurationMonths": round(an.median(durs)) if durs else None,
+        "medianEnrollment": round(an.median(enroll_targets)) if enroll_targets else None,
         "discontinuationRate": round(dropped / n * 100) if n else 0,
         "discontinued": dropped,
         "nctSample": [s["nctId"] for s in members[:8]],
     }
 
 
+def _classify(s, axis, ctx):
+    cache = ctx["cache"].setdefault(axis, {})
+    hit = cache.get(s["nctId"])
+    if hit is None:
+        hit = cache[s["nctId"]] = _AXES[axis][1](s, ctx)
+    return hit
+
+
 def _apply_axis(studies, axis, ctx):
-    fn = _AXES[axis][1]
-    buckets: dict[str, dict] = {}
-    order: list[str] = []
+    buckets: dict = {}
+    order: list = []
     for s in studies:
-        key, label = fn(s, ctx)
+        key, label = _classify(s, axis, ctx)
         b = buckets.get(key)
         if not b:
             b = buckets[key] = {"key": key, "label": label, "members": []}
@@ -223,52 +234,67 @@ _DEFINITIONS = {
 
 
 def _applicability(studies, axis, ctx) -> int:
-    fn = _AXES[axis][1]
     keys = set()
     for s in studies:
-        k, _ = fn(s, ctx)
+        k, _ = _classify(s, axis, ctx)
         if k != "unknown":
             keys.add(k)
     return len(keys)
 
 
-@router.get("/")
-async def get_cohorts(
-    condition: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    phases: Optional[str] = Query(None),
-    studyTypes: Optional[str] = Query(None),
-    sponsorClasses: Optional[str] = Query(None),
-    country: Optional[str] = Query(None),
-    fromYear: Optional[int] = Query(None, ge=2000, le=2030),
-    axis: Optional[str] = Query(None),
-):
-    result = await ct_gov.search_studies(
-        condition=condition, status=_csv(status), phases=_csv(phases),
-        study_types=_csv(studyTypes), sponsor_classes=_csv(sponsorClasses),
-        country=country, from_year=fromYear, page_size=1000,
-    )
-    studies = result["studies"]
+_NOUNS = {"cancer", "carcinoma", "tumor", "tumour", "neoplasm", "sarcoma"}
+_MODIFIERS = _GENERIC | {
+    "small", "positive", "negative", "non", "early", "late", "line", "first", "second", "third",
+    "mutant", "mutated", "mutation", "wild", "high", "low", "risk", "hormone", "receptor",
+    "resistant", "locally", "newly", "diagnosed", "untreated", "naive", "naïve", "squamous",
+    "nonsquamous", "triple", "hormonal", "positive", "negative", "unresectable", "operable",
+}
+# Common acronyms people type instead of the full disease name → a word that appears in
+# the registry's condition strings, so the "basket vs focused" test recognises them.
+_ACRONYM = {
+    "aml": "myeloid", "all": "lymphoblastic", "cml": "myeloid", "cll": "lymphocytic",
+    "nsclc": "lung", "sclc": "lung", "hcc": "hepatocellular", "crc": "colorectal",
+    "mm": "myeloma", "mf": "myelofibrosis", "pv": "vera", "et": "thrombocythemia",
+    "mds": "myelodysplastic", "dlbcl": "lymphoma", "t2d": "diabetes", "t2dm": "diabetes",
+    "t1d": "diabetes", "ckd": "kidney", "copd": "pulmonary", "ra": "rheumatoid",
+}
 
-    # Pre-compute each study's searchable text once.
-    text_by_nct = {s["nctId"]: _study_text(s) for s in studies}
 
-    # Parse the query into primary indication + qualifier(s). People search
-    # disease-first ("myelofibrosis anemia"), so the first distinctive token is
-    # the indication and the rest are qualifiers/comorbidities (e.g. "anemia").
-    q_terms = [w for w in re.findall(r"[a-z]{4,}", (condition or "").lower()) if w not in _GENERIC]
-    primary = q_terms[0] if q_terms else None
-    qualifiers = q_terms[1:]
-    ctx = {"text": text_by_nct, "primary": primary, "qualifiers": qualifiers}
+def _parse_query(condition: Optional[str]):
+    """Split a free-text search into (primary indication word, qualifier words).
 
-    # Which axes actually split this set into ≥2 meaningful groups?
+    "Non-small cell lung cancer" → primary "lung"; "HER2 positive breast cancer" → primary
+    "breast", qualifier "her2"; "AML" → primary "myeloid". The old parse took the first
+    4+-letter non-generic word, giving "small" / "positive" / nothing for these."""
+    words = re.findall(r"[a-z0-9][a-z0-9\-]*", (condition or "").lower())
+    words = [_ACRONYM.get(w, w) if w in _ACRONYM and len(words) == 1 else w for w in words]
+    words = [w for w in words if not w.startswith("non-")]   # "non-small", "non-squamous"
+    content = [w for w in words if w not in _MODIFIERS and len(w) >= 3]
+    if not content:
+        return None, []
+    primary = None
+    for i, w in enumerate(words):
+        if w in _NOUNS:
+            before = [x for x in words[:i] if x not in _MODIFIERS and len(x) >= 3]
+            primary = before[-1] if before else None
+            break
+    if primary is None:
+        primary = content[0]
+    quals = [w for w in content if w != primary]
+    return primary, quals
+
+
+def _compute(studies: list, condition: Optional[str], axis: Optional[str]) -> dict:
+    raw = {s["nctId"]: _study_raw(s) for s in studies}
+    text = {k: v.lower() for k, v in raw.items()}
+    primary, qualifiers = _parse_query(condition)
+    ctx = {"text": text, "raw": raw, "primary": primary, "qualifiers": qualifiers, "cache": {}}
+
     available = []
     for key, (label, _) in _AXES.items():
         n = _applicability(studies, key, ctx)
         available.append({"key": key, "label": label, "groupCount": n, "applicable": n >= 2})
 
-    # Auto-suggest: population scope when the query carries a qualifier; else the
-    # axis that yields the most balanced split (prefer biomarker → line → geo).
     if axis not in _AXES:
         if qualifiers and _applicability(studies, "population_scope", ctx) >= 2:
             axis = "population_scope"
@@ -276,14 +302,15 @@ async def get_cohorts(
             pref = ["biomarker", "line_of_therapy", "geography", "mono_combo", "population_scope"]
             axis = next((a for a in pref if _applicability(studies, a, ctx) >= 2), "geography")
 
-    groups = _apply_axis(studies, axis, ctx)
-
     return {
-        "coverage": {"analyzed": len(studies), "total": result["totalCount"],
-                     "isComplete": len(studies) >= result["totalCount"]},
         "query": {"primary": primary, "qualifiers": qualifiers},
         "axis": axis,
         "suggestedAxis": axis,
         "availableAxes": available,
-        "groups": groups,
+        "groups": _apply_axis(studies, axis, ctx),
     }
+
+
+@router.get("/")
+async def get_cohorts(f: Filters = Depends(common_filters), axis: Optional[str] = Query(None)):
+    return await analyse(f, "cohorts", lambda s: _compute(s, f.condition, axis), (f.condition, axis))

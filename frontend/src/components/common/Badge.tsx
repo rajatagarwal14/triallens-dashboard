@@ -1,3 +1,4 @@
+import { phaseLabel } from '@/lib/phases'
 import { clsx } from 'clsx'
 
 const STATUS_MAP: Record<string, string> = {
@@ -42,11 +43,6 @@ const STATUS_LABELS: Record<string, string> = {
   WITHHELD:                'Withheld',
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  PHASE1: 'Phase I', EARLY_PHASE1: 'Early Phase I',
-  PHASE2: 'Phase II', PHASE3: 'Phase III', PHASE4: 'Phase IV', NA: 'N/A',
-}
-
 interface Props {
   value: string
   type: 'status' | 'phase'
@@ -56,11 +52,11 @@ interface Props {
 export function Badge({ value, type, size = 'sm' }: Props) {
   const cls = type === 'status'
     ? STATUS_MAP[value] ?? 'status-default'
-    : PHASE_MAP[value] ?? 'status-default'
+    : PHASE_MAP[value] ?? PHASE_MAP[value.split('/').pop() ?? ''] ?? 'status-default'
 
   const label = type === 'status'
     ? (STATUS_LABELS[value] ?? value)
-    : (PHASE_LABELS[value] ?? value)
+    : phaseLabel(value)
 
   return (
     <span className={clsx(

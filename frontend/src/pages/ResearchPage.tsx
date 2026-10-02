@@ -13,6 +13,8 @@ import { CoverageBadge } from '@/components/common/CoverageBadge'
 import { ErrorState } from '@/components/common/ErrorState'
 import { SkeletonChart } from '@/components/common/SkeletonCard'
 import { ActiveFilters } from '@/components/common/ActiveFilters'
+import { useAnalytics } from '@/hooks/useAnalytics'
+import { PHASE_COLORS, phaseLabel } from '@/lib/phases'
 import { api } from '@/api/client'
 import { useSharedSearch, filterParams } from '@/context/SearchContext'
 import type { Insight } from '@/types'
@@ -28,11 +30,6 @@ const INSIGHT_ICON: Record<string, any> = {
 }
 
 // IQVIA phase palette for the readout-forecast stacked bars.
-const PHASE_COLORS: Record<string, string> = {
-  EARLY_PHASE1: '#7FA9C3', PHASE1: '#005487', PHASE2: '#00A3E0',
-  PHASE3: '#6CC04A', PHASE4: '#FE8A12', NA: '#B0BEC5',
-}
-
 function InsightCard({ insight, i }: { insight: Insight; i: number }) {
   const Icon = INSIGHT_ICON[insight.kind] ?? Lightbulb
   return (
@@ -55,10 +52,7 @@ export function ResearchPage() {
   const [input, setInput] = useState(condition)
 
   const params = filterParams(filters)
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['research', params],
-    queryFn: () => api.getResearch(params),
-  })
+  const { data, isLoading, isError, error, refetch } = useAnalytics(['research', params], () => api.getResearch(params))
 
   const analyze = (c: string) => { const v = c.trim(); if (v.length >= 2) setFilters({ condition: v }) }
 
@@ -122,7 +116,7 @@ export function ResearchPage() {
             {readoutPhases.map(p => (
               <span key={p} className="inline-flex items-center gap-1">
                 <span className="w-2 h-2 rounded-sm" style={{ background: PHASE_COLORS[p] ?? '#B0BEC5' }} />
-                {readout?.phaseLabels[p] ?? p}
+                {phaseLabel(p)}
               </span>
             ))}
           </p>
@@ -138,7 +132,7 @@ export function ResearchPage() {
                     <Label value="Number of Trials" angle={-90} position="insideLeft" offset={0} fill="#6B7A85" fontSize={10} style={{ textAnchor: 'middle' }} />
                   </YAxis>
                   <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(0,163,224,0.05)' }}
-                    formatter={(v: number, name: string) => [v, readout?.phaseLabels[name] ?? name]} />
+                    formatter={(v: number, name: string) => [v, phaseLabel(name)]} />
                   {readoutPhases.map(p => (
                     <Bar key={p} dataKey={p} stackId="r" fill={PHASE_COLORS[p] ?? '#B0BEC5'} radius={[0, 0, 0, 0]} />
                   ))}

@@ -10,6 +10,7 @@ import { CoverageBadge } from '@/components/common/CoverageBadge'
 import { ErrorState } from '@/components/common/ErrorState'
 import { SkeletonChart } from '@/components/common/SkeletonCard'
 import { ActiveFilters } from '@/components/common/ActiveFilters'
+import { useAnalytics } from '@/hooks/useAnalytics'
 import { api } from '@/api/client'
 import { useSharedSearch, filterParams } from '@/context/SearchContext'
 import { clsx } from 'clsx'
@@ -51,7 +52,7 @@ function SiteCard({ s, rank, max, onOpen }: { s: SiteRow; rank: number; max: num
             <div className="h-full rounded-full bg-iq-blue" style={{ width: `${(s.trials / max) * 100}%` }} />
           </div>
           <div className="flex items-center justify-between gap-2 mt-1">
-            <span className="text-[9px] text-iq-muted">avg enrollment {s.avgEnrollment.toLocaleString()} · {s.enrollment.toLocaleString()} total</span>
+            <span className="text-[9px] text-iq-muted">avg trial target {s.avgEnrollment.toLocaleString()} pts · {s.enrollment.toLocaleString()} summed across its trials</span>
             <EnrollRate rate={s.enrollRate} />
           </div>
         </div>
@@ -81,7 +82,7 @@ function PICard({ p, rank, onOpen }: { p: InvestigatorRow; rank: number; onOpen:
             ))}
           </div>
           <div className="flex items-center justify-between gap-2 mt-1">
-            <span className="text-[9px] text-iq-muted">avg enrollment {p.avgEnrollment.toLocaleString()} across {p.trials} trial{p.trials !== 1 ? 's' : ''}</span>
+            <span className="text-[9px] text-iq-muted">avg trial target {p.avgEnrollment.toLocaleString()} pts across {p.trials} trial{p.trials !== 1 ? 's' : ''}</span>
             <EnrollRate rate={p.enrollRate} />
           </div>
         </div>
@@ -101,10 +102,7 @@ export function SitesPage() {
   const [tab, setTab] = useState<'sites' | 'investigators'>('sites')
 
   const params = filterParams(filters)
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['sites', params],
-    queryFn: () => api.getSites(params),
-  })
+  const { data, isLoading, isError, error, refetch } = useAnalytics(['sites', params], () => api.getSites(params))
 
   const analyze = (c: string) => { const v = c.trim(); if (v.length >= 2) setFilters({ condition: v }) }
   const maxSiteTrials = data?.sites?.[0]?.trials ?? 1
@@ -182,7 +180,7 @@ export function SitesPage() {
             <div className="px-4 py-3 border-b border-iq-border flex items-center gap-1.5">
               <Award className="w-3.5 h-3.5 text-iq-orange" />
               <p className="text-sm font-semibold text-iq-navy">Site-Activity Leaderboard</p>
-              <span className="text-[10px] text-iq-muted ml-auto">ranked by trials run · then enrollment handled</span>
+              <span className="text-[10px] text-iq-muted ml-auto">ranked by trials run · then total target enrolment of those trials (not patients recruited by the site)</span>
             </div>
             {isLoading ? <div className="p-5"><SkeletonChart height={300} /></div> : (data?.sites.length ?? 0) === 0 ? (
               <p className="px-4 py-8 text-xs text-iq-muted text-center">No geo-located sites in the analyzed sample.</p>
@@ -198,7 +196,7 @@ export function SitesPage() {
             <div className="px-4 py-3 border-b border-iq-border flex items-center gap-1.5">
               <Award className="w-3.5 h-3.5 text-iq-orange" />
               <p className="text-sm font-semibold text-iq-navy">Investigator Experience Scorecards</p>
-              <span className="text-[10px] text-iq-muted ml-auto"># trials · therapeutic focus · enrollment track record</span>
+              <span className="text-[10px] text-iq-muted ml-auto"># trials · therapeutic focus · target size of trials led</span>
             </div>
             {isLoading ? <div className="p-5"><SkeletonChart height={300} /></div> : (data?.investigators.length ?? 0) === 0 ? (
               <p className="px-4 py-8 text-xs text-iq-muted text-center">

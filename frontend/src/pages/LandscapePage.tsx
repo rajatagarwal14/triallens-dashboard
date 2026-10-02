@@ -15,22 +15,10 @@ import { clsx } from 'clsx'
 import { SkeletonStatCard, SkeletonChart } from '@/components/common/SkeletonCard'
 import { CoverageBadge } from '@/components/common/CoverageBadge'
 import { ErrorState } from '@/components/common/ErrorState'
+import { useAnalytics } from '@/hooks/useAnalytics'
 import { api } from '@/api/client'
+import { PHASE_COLORS, phaseLabel } from '@/lib/phases'
 import { CohortPanel } from '@/components/cohorts/CohortPanel'
-
-// IQVIA-palette phase colors
-const PHASE_COLORS: Record<string, string> = {
-  PHASE1:      '#005487',
-  EARLY_PHASE1:'#7FA9C3',
-  PHASE2:      '#00A3E0',
-  PHASE3:      '#6CC04A',
-  PHASE4:      '#FE8A12',
-  NA:          '#B0BEC5',
-}
-const PHASE_LABELS: Record<string, string> = {
-  PHASE1: 'Phase I', EARLY_PHASE1: 'Early I',
-  PHASE2: 'Phase II', PHASE3: 'Phase III', PHASE4: 'Phase IV', NA: 'N/A',
-}
 
 const STATUS_COLORS: Record<string, string> = {
   RECRUITING:              '#6CC04A',
@@ -77,7 +65,7 @@ function VelocityTooltip({ active, payload }: { active?: boolean; payload?: any[
           {d.yoy >= 0 ? '▲' : '▼'} {Math.abs(d.yoy)}% vs prior year
         </p>
       )}
-      {d.avg !== null && <p className="text-iq-muted">avg {d.avg.toLocaleString()} patients/trial</p>}
+      {d.avg !== null && <p className="text-iq-muted">median {d.avg.toLocaleString()} patients/trial</p>}
     </div>
   )
 }
@@ -113,10 +101,7 @@ export function LandscapePage() {
   const [velMode, setVelMode] = useState<'total' | 'phase' | 'sponsor'>('total')
 
   const params = filterParams(filters)
-  const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['landscape', params],
-    queryFn: () => api.getLandscape(params),
-  })
+  const { data, isLoading, isError, error, refetch } = useAnalytics(['landscape', params], () => api.getLandscape(params))
 
   // Analyze a new indication here — updates the shared condition (keeps filters).
   const analyze = (c: string) => {
@@ -156,7 +141,7 @@ export function LandscapePage() {
 
   // Keep the raw CT.gov key on each datum so clicks map back to a filter value.
   const phaseData = Object.entries(data?.phaseCounts ?? {}).map(([k, v]) => ({
-    key: k, name: PHASE_LABELS[k] ?? k, value: v, color: PHASE_COLORS[k] ?? '#B0BEC5',
+    key: k, name: phaseLabel(k), value: v, color: PHASE_COLORS[k] ?? '#B0BEC5',
   }))
 
   const statusData = Object.entries(data?.statusCounts ?? {})
@@ -171,9 +156,15 @@ export function LandscapePage() {
   // Enrollment velocity: trials started per year + avg trial size, with YoY %.
   // Honor the active look-back filter so the axis floor matches what's applied.
   const yearFloor = filters.fromYear ?? 2010
-  const rawYears = Object.entries(data?.yearCounts ?? {})
+  const observed = Object.entries(data?.yearCounts ?? {})
     .filter(([y]) => !isNaN(+y) && +y >= yearFloor)
-    .sort((a, b) => +a[0] - +b[0])
+    .map(([y, c]) => [+y, c] as [number, number])
+  // Fill years with no starts as 0 so "vs prior year" always compares ADJACENT years.
+  const byYear = new Map(observed)
+  const firstY = observed.length ? Math.min(...observed.map(o => o[0])) : 0
+  const lastY = observed.length ? Math.max(...observed.map(o => o[0])) : -1
+  const rawYears: [string, number][] = []
+  for (let y = firstY; y <= lastY; y++) rawYears.push([String(y), byYear.get(y) ?? 0])
   const velocityRange = filters.fromYear ? `${filters.fromYear}–Present` : '2010–Present'
   const enrollByYear = data?.enrollmentByYear ?? {}
   const yearData = rawYears.map(([year, count], i) => {
@@ -198,7 +189,7 @@ export function LandscapePage() {
     ? rawYears.map(([year]) => ({ year, ...Object.fromEntries(segKeys.map(k => [k, segSource![year]?.[k] ?? 0])) }))
     : []
   const segColor = (k: string) => PHASE_COLORS[k] ?? SPONSOR_COLORS[k] ?? '#7FA9C3'
-  const segLabel = (k: string) => PHASE_LABELS[k] ?? k
+  const segLabel = (k: string) => (velMode === 'phase' ? phaseLabel(k) : k)
 
   const topCountries = Object.entries(data?.countryCounts ?? {}).slice(0, 10)
     .map(([country, count]) => ({ country, count }))
@@ -250,7 +241,7 @@ export function LandscapePage() {
             : <>
                 <StatCard icon={Globe}      label="Total Trials"   value={data?.totalCount ?? 0}   sub="in ClinicalTrials.gov" color="#00A3E0" delay={0} />
                 <StatCard icon={TrendingUp} label="Recruiting"     value={recruiting}               sub="actively enrolling"   color="#6CC04A" delay={0.05} />
-                <StatCard icon={Users}      label="Avg Enrollment" value={data?.avgEnrollment ?? 0} sub="patients per trial"   color="#005487" delay={0.1} />
+                <StatCard icon={Users}      label="Median Enrollment" value={data?.medianEnrollment ?? 0} sub={`patients per trial · n=${(data?.enrollmentN ?? 0).toLocaleString()}`}   color="#005487" delay={0.1} />
                 <StatCard icon={Building2}  label="Completed"      value={completed}                sub="historical trials"    color="#FE8A12" delay={0.15} />
               </>
           }
@@ -346,7 +337,7 @@ export function LandscapePage() {
             {velMode === 'total' ? (
               <>
                 <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-iq-blue" /> Trials initiated / year</span>
-                <span className="inline-flex items-center gap-1 ml-3"><span className="w-2 h-0.5 bg-iq-orange" /> Avg trial size (patients)</span>
+                <span className="inline-flex items-center gap-1 ml-3"><span className="w-2 h-0.5 bg-iq-orange" /> Median trial size (patients)</span>
               </>
             ) : (
               <span className="inline-flex flex-wrap gap-x-3 gap-y-0.5">
@@ -419,7 +410,7 @@ export function LandscapePage() {
               <p className="text-[9px] text-iq-muted text-center mt-0.5">
                 <span className="text-iq-blue font-medium">Left Y-axis: Trials Initiated</span>
                 &nbsp;·&nbsp;
-                <span className="text-iq-orange font-medium">Right Y-axis: Avg Enrollment (patients)</span>
+                <span className="text-iq-orange font-medium">Right Y-axis: Median Enrollment (patients)</span>
               </p>
             </>
           )}
