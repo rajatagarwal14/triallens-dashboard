@@ -108,5 +108,5 @@ jobs:
           cd frontend
           start "TrialLens Dashboard" /b cmd /c "npm run dev"
           ping -n 16 127.0.0.1 >nul
-          curl.exe -s -m 3 "http://127.0.0.1:5173/" | findstr /i /c:"TrialLens" || exit /b 1
+          curl.exe -s -m 3 "http://localhost:5173/" | findstr /i /c:"TrialLens" || exit /b 1
           exit /b 0
