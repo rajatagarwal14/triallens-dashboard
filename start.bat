@@ -187,6 +187,14 @@ if not "!LOCK_HASH!"=="!LOCK_OLD!" (
     echo   [3/4] Dashboard packages are up to date.
 )
 
+rem --- First install only: keep ONE zip of the complete source in Downloads as the
+rem     baseline ("source of truth"). It is never overwritten, so the original working
+rem     version can always be restored by unzipping it. Failure here is harmless. ---
+if exist "%USERPROFILE%\Downloads" if not exist "%USERPROFILE%\Downloads\TrialLens-source.zip" (
+    call "%~dp0package-source.bat" "%USERPROFILE%\Downloads\TrialLens-source.zip"
+    if not errorlevel 1 echo   Saved a copy of the source to Downloads\TrialLens-source.zip
+)
+
 echo   [4/4] Starting TrialLens...
 echo.
 

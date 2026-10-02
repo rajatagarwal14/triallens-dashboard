@@ -7,7 +7,7 @@ rem use port 8000 or 5173 is left alone.
 call :stopport 8000 backend
 call :stopport 5173 frontend
 echo Done. (You can also just close the two TrialLens windows.)
-pause
+if /i not "%~1"=="/q" pause
 exit /b 0
 
 :stopport

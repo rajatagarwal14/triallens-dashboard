@@ -206,6 +206,16 @@ All optional; defaults work.
 | `TRIALLENS_USE_SYSTEM_CERTS` | off | `1` = trust the Windows/macOS certificate store (needs `pip install truststore`) |
 | `VITE_CARTO_API_KEY` / `VITE_MAP_TILE_URL` | unset | Optional Geo basemap (frontend, build-time; see `frontend/.env.example`). The map works without one |
 
+### Changing and redeploying locally
+
+On first run `start.bat` saves **one zip of the complete source** to
+`Downloads\TrialLens-source.zip` — the baseline "source of truth" (never overwritten, so
+unzipping it restores the original working version). To change something, edit the files in
+the install folder (`backend\` for logic, `frontend\src\` for screens), then double-click
+**`redeploy.bat`**: it stops TrialLens, saves your edited source as
+`Downloads\TrialLens-source-edited.zip`, and starts it again with your changes. Keep your edits
+in the install folder, not in the zip.
+
 ### Company networks
 
 TrialLens needs HTTPS access to `clinicaltrials.gov`, plus (first install only) your approved
