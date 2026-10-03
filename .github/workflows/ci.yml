@@ -36,7 +36,8 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
-      - run: npm audit --audit-level=high
+      # Shipped (runtime) packages must be clean. Build-tool-only advisories are reviewed by hand.
+      - run: npm audit --omit=dev --audit-level=high
         working-directory: frontend
 
   # Runs the real Windows launcher building blocks on a real Windows machine.

@@ -230,7 +230,9 @@ locked-down laptop have IT provide them instead.
 There is **no login and no HTTPS** — it is built to run on your own computer and binds to
 `127.0.0.1` only. Do not expose it on a network as-is; shared hosting needs an authenticated
 reverse proxy. The packaged static server is protected against path traversal. Frontend
-dependencies are locked (`npm ci`) and currently report 0 `npm audit` findings.
+dependencies are locked (`npm ci`); the packages that ship report 0 `npm audit` findings. A
+build-time-only advisory (`braces`, via Tailwind CSS 3) is open; it does not run in the
+browser or server and fixing it needs a Tailwind major upgrade.
 
 ### Data provenance
 
