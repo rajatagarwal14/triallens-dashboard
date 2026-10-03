@@ -214,7 +214,8 @@ unzipping it restores the original working version). To change something, edit t
 the install folder (`backend\` for logic, `frontend\src\` for screens), then double-click
 **`redeploy.bat`**: it stops TrialLens, saves your edited source as
 `Downloads\TrialLens-source-edited.zip`, and starts it again with your changes. Keep your edits
-in the install folder, not in the zip.
+in the install folder, not in the zip. It also saves `Downloads\TrialLens-Copilot-prompts.txt`
+(open it in Notepad): ready-to-paste prompts for building a company Copilot agent.
 
 ### Company networks
 

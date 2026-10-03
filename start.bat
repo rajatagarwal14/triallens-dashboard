@@ -195,6 +195,12 @@ if exist "%USERPROFILE%\Downloads" if not exist "%USERPROFILE%\Downloads\TrialLe
     if not errorlevel 1 echo   Saved a copy of the source to Downloads\TrialLens-source.zip
 )
 
+rem --- Also keep the Copilot prompts as a plain text file (opens in Notepad). Never overwritten. ---
+if exist "%USERPROFILE%\Downloads" if not exist "%USERPROFILE%\Downloads\TrialLens-Copilot-prompts.txt" (
+    copy /y "%~dp0TrialLens-Copilot-prompts.txt" "%USERPROFILE%\Downloads\TrialLens-Copilot-prompts.txt" >nul 2>nul
+    if not errorlevel 1 echo   Saved Copilot prompts to Downloads\TrialLens-Copilot-prompts.txt
+)
+
 echo   [4/4] Starting TrialLens...
 echo.
 
